@@ -21,7 +21,8 @@
     "db:migrate:deploy": "prisma migrate deploy",
     "db:seed": "tsx --env-file=.env prisma/seed.ts",
     "db:studio": "prisma studio",
-    "postinstall": "prisma generate"
+    "postinstall": "prisma generate",
+    "emails:dev": "email dev --dir src/emails/templates --port 3010"
   },
   "dependencies": {
     "@fastify/cookie": "9.4.0",
