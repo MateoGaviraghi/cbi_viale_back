@@ -10,6 +10,8 @@ import { AuthModule } from './auth/auth.module'
 import { UsersModule } from './users/users.module'
 import { ServicesModule } from './services/services.module'
 import { AvailabilityModule } from './availability/availability.module'
+import { AppointmentsModule } from './appointments/appointments.module'
+import { EmailsModule } from './emails/emails.module'
 import { HealthModule } from './health/health.module'
 
 @Module({
@@ -51,6 +53,8 @@ import { HealthModule } from './health/health.module'
     UsersModule,
     ServicesModule,
     AvailabilityModule,
+    EmailsModule,
+    AppointmentsModule,
     HealthModule,
   ],
   providers: [
