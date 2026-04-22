@@ -188,7 +188,18 @@ Ver memoria `project_decisions.md` para contexto completo:
 
 - `EmailKind` enum sin `APPOINTMENT_REPROGRAMMED` — reprogram reusa `APPOINTMENT_CONFIRMATION` con `payload.reprogrammed: true`. Para métricas, idealmente agregar enum value o columna `metadata` en `EmailLog`. Deuda chica para B-5 o post-B-3.
 - `tsconfig.json` tiene `jsx: react-jsx` global — sin efectos negativos hasta ahora, pero si aparecen errores raros, considerar `tsconfig.emails.json` aparte.
-- `npm audit` reporta 32 vulnerabilidades (4 low, 19 moderate, 7 high, 2 critical) probablemente en transitivas de `react-email` CLI — revisar en un slot de mantenimiento.
+
+### Fix post-push · Railway bloqueado por CVE en `next@14.2.10` (transitiva de `react-email`)
+
+Primer deploy a Railway (`d55b05ec`) falló en el gate de seguridad: `next@14.2.10` tiene 2 CVEs HIGH (GHSA-mwv6-3258-q52c y GHSA-5j59-xgg2-r9c4) fijos en 14.2.35. Next entró al lock file como transitiva de `react-email@3.0.2` — el CLI está construido sobre Next.js.
+
+**Fix aplicado:** `npm uninstall react-email`. El CLI era solo para preview local (design-time). El render productivo usa `@react-email/render` + `@react-email/components` (prod deps) que no traen Next.
+
+Script `emails:dev` cambió a `npx react-email@latest dev --dir src/emails/templates --port 3010` — `npx` descarga on-demand, no contamina `node_modules` ni el lock. Alternativa: instalar globalmente con `npm install -g react-email`.
+
+**Verificado:** `node_modules/next` desapareció del lock file. type-check + build limpios post-uninstall.
+
+Trade-off aceptado: primera ejecución de `npm run emails:dev` tarda un poco más (descarga `react-email` y sus ~50MB de deps a cache de npx). Subsecuentes usan cache. A cambio, el deploy productivo queda sin `next` ni ~200 transitivas Next-related, y futuros CVEs de Next no bloquean Railway.
 
 ---
 
