@@ -12,11 +12,10 @@ Documento vivo del avance del backend. Actualizado tras cada unidad de trabajo s
 |---|---|
 | Skeleton (Nest + Fastify + Prisma + Auth + Services + Health) | ✅ en `main` |
 | AvailabilityModule (CRUD admin + lectura pública) | ✅ en `main` |
-| AppointmentsModule (turnos + algoritmo de slots ARG-tz) | ✅ local · pendiente push |
-| EmailsModule (stub para B2 — log + EmailLog SENT) | ✅ local · pendiente push |
-| SubmissionsModule | 🔴 próximo (B3) |
-| UsersModule (endpoints admin) | 🔴 Fase 1 (B4) |
-| EmailsModule completo (React Email + Resend + BullMQ) | 🔴 Fase 1 — reemplaza el stub |
+| AppointmentsModule (turnos + algoritmo de slots ARG-tz) | ✅ en `main` |
+| EmailsModule completo (BullMQ + Resend + 5 templates React Email) | ✅ local · pendiente push |
+| SubmissionsModule | 🔴 próximo (B-2) |
+| UsersModule (endpoints admin) | 🔴 Fase 1 (B-3) |
 | CronModule (recordatorios 24h) | 🟡 Fase 2 |
 | AuditLogModule (helper + endpoints admin) | 🟡 Fase 2 |
 | ExportsModule (PDF/Excel a R2) | 🟡 Fase 2 |
@@ -25,6 +24,171 @@ Documento vivo del avance del backend. Actualizado tras cada unidad de trabajo s
 | Deploy Railway auto desde `main` | Pendiente de verificar primer build |
 
 **Repo:** [MateoGaviraghi/cbi_viale_back](https://github.com/MateoGaviraghi/cbi_viale_back) · branch `main`.
+
+---
+
+## 2026-04-22 · Sesión 3 — EmailsModule real (B-1 del PLAN)
+
+### Contexto de entrada
+
+Sesión 2 pusheada a `main` (`0949773` + `335d7fc`). Front ya alineado como cliente puro. PLAN.md sección B-1 dice: reemplazar stub por BullMQ queue + worker + React Email templates + Resend, manteniendo el contrato `EmailsService.enqueue()` estable.
+
+**Setup local entregado:**
+- Docker Redis en `0.0.0.0:6379` (container `cbi-redis`)
+- `RESEND_API_KEY` real de sandbox (`re_***QjV`, free tier 100/día)
+- `RESEND_FROM_EMAIL="CBI Viale Dev <onboarding@resend.dev>"` (sandbox, sin DNS propio todavía)
+- Inbox de prueba: `mateogaviraghi24@gmail.com` (owner Resend, única verificada en sandbox)
+
+### 1. Plan aprobado
+
+Estructura dual-mode decidida por presencia de `RESEND_API_KEY`:
+- **Direct** (key vacía): log Pino + `EmailLog` SENT inmediato, sin tocar Redis
+- **Queue** (key seteada): `EmailLog` QUEUED + BullMQ add → worker consume → render → Resend → update SENT/FAILED
+
+3 commits planificados: deps + tsconfig, feat(emails) completo, docs PROGRESS.md.
+
+### 2. Commit 1 · deps + tsconfig (hash `75047ef`)
+
+Ya pusheado previamente junto a sesión 2 preparando B-1.
+
+Deps agregadas:
+- `@nestjs/bullmq 10.2.3` (prod) — wrapper oficial Nest 10 para BullMQ con DI + `@Processor`
+- `react 19.2.5` (prod) — peer dep de `@react-email/render`
+- `@types/react 19.2.2` (dev) — tipado JSX
+- `react-email 3.0.2` (dev) — CLI `email dev` para preview de templates
+
+**Bug de instalación resuelto:** intenté inicialmente React 18.3.1. Fallo ERESOLVE: `react-email` CLI jala `react-dom 19.2.5` como transitiva, y ese `react-dom` requiere `react@^19.2.5`. Alineé todo en React 19. `@react-email/render 1.0.1` soporta ambos (`peer react@^18 || ^19`).
+
+`tsconfig.json` recibió `"jsx": "react-jsx"` para compilar `.tsx` sin import explícito de React.
+
+### 3. Resolución de `.env` duplicado
+
+Al arrancar pruebas detecté 2 líneas duplicadas de `REDIS_URL` y `BUSINESS_NOTIFICATION_EMAIL` en `.env`. Node `--env-file` toma la última, con lo cual `BUSINESS_NOTIFICATION_EMAIL` resolvía a `contacto@cbiviale.com.ar` — dominio sin DNS todavía, bloqueado por Resend sandbox (solo permite envío al owner de la cuenta).
+
+Usuario confirmó dedup (opción B). Lo hice: quité la línea duplicada de `REDIS_URL` (mismo valor) y la stale de `BUSINESS_NOTIFICATION_EMAIL`, dejando `mateogaviraghi24@gmail.com` (misma inbox que `RESEND_REPLY_TO`). Cuando el dominio se registre en Fase 4, se cambia a `contacto@cbiviale.com.ar`.
+
+### 4. Implementación · EmailsModule real
+
+**Archivos creados (11):**
+
+```
+src/emails/
+├── emails.constants.ts              # EMAIL_QUEUE_NAME = 'emails', EMAIL_JOB_NAME = 'send'
+├── emails.types.ts                  # EmailJobData, EmailEnqueueParams
+├── emails.module.ts                 # ← reemplaza stub
+├── emails.service.ts                # ← reemplaza stub (dual mode)
+├── emails.processor.ts              # Worker BullMQ + render + Resend
+└── templates/
+    ├── utils.ts                     # formatDateArg con Intl + timeZone ARG
+    ├── styles.ts                    # paleta CBI (cyan/slate) + CSSProperties tipados
+    ├── components/
+    │   ├── Layout.tsx               # header branding + footer con dirección/horarios
+    │   └── InfoRow.tsx              # label/value reusable con strikethrough opcional
+    ├── appointment-confirmation.tsx # con prop reprogrammed para reuso en create/reprogram
+    ├── appointment-cancelled.tsx
+    ├── appointment-reminder-24h.tsx # placeholder para B-5 CronModule
+    ├── form-submission-receipt.tsx  # placeholder para B-2 SubmissionsModule
+    └── internal-notification.tsx    # union discriminado appointment|submission
+```
+
+**EmailsModule setup:**
+```ts
+BullModule.forRootAsync({
+  useFactory: (config) => {
+    const url = new URL(config.get('REDIS_URL'))
+    return {
+      connection: {
+        host: url.hostname,
+        port: Number(url.port) || 6379,
+        username: url.username || undefined,
+        password: url.password || undefined,
+        maxRetriesPerRequest: null, // requerido por BullMQ
+      },
+    }
+  },
+}),
+BullModule.registerQueue({
+  name: EMAIL_QUEUE_NAME,
+  defaultJobOptions: {
+    attempts: 3,
+    backoff: { type: 'exponential', delay: 2000 },
+    removeOnComplete: { age: 86_400 },    // 24h
+    removeOnFail: { age: 604_800 },       // 7d
+  },
+}),
+```
+
+**EmailsService (dual mode):**
+```ts
+const apiKey = config.get('RESEND_API_KEY')
+this.isDirectMode = !apiKey || apiKey.trim() === ''
+
+async enqueue(params) {
+  const log = await prisma.emailLog.create({
+    data: { ...params, status: isDirectMode ? 'SENT' : 'QUEUED', ... }
+  })
+  if (this.isDirectMode) {
+    this.logger.log({ event: 'email.direct', ... })
+    return
+  }
+  await this.queue.add(EMAIL_JOB_NAME, { emailLogId: log.id, ...params })
+}
+```
+
+**EmailsProcessor:**
+- `@Processor(EMAIL_QUEUE_NAME, { concurrency: 5 })`
+- En `process(job)`: renderiza template con `createElement(Component, payload) + render()`, despacha con `resend.emails.send()`, update EmailLog.
+- Si Resend devuelve error: throw → BullMQ retry. Solo marca EmailLog FAILED en el último attempt (`attemptsMade >= attempts`).
+- Dispatch por kind:
+  ```ts
+  switch (kind) {
+    case 'APPOINTMENT_CONFIRMATION': return render(createElement(AppointmentConfirmation, payload as never))
+    case 'APPOINTMENT_CANCELLED':    return render(createElement(AppointmentCancelled,    payload as never))
+    // ...
+  }
+  ```
+
+**Templates:** cada uno exporta `default` + `.PreviewProps` fixtures para `email dev`. El Layout centraliza branding; InfoRow estandariza pares label/value. Paleta cyan `#0e7490` (brand) + slate para texto.
+
+**`npm run emails:dev`:** ejecuta `email dev --dir src/emails/templates --port 3010`.
+
+### 5. Pruebas ejecutadas (5/5 OK)
+
+| # | Check | Resultado |
+|---|---|---|
+| 1 | `npm run type-check` + `npm run build` | ✅ limpios al primer intento |
+| 2 | **Queue mode E2E** (`.env` con API key real) | ✅ boot "Modo QUEUE" → POST appointment → Worker procesa 2 jobs → **2 emails reales llegan a `mateogaviraghi24@gmail.com`** (APPOINTMENT_CONFIRMATION + INTERNAL_NOTIFICATION) → `EmailLog` SENT con providerId Resend `0680e097-e53e-493c-a7fb-ab3493991e2b` y `d0fb94b0-e3fa-4884-a062-1fccf2d4992d` |
+| 3 | **Direct mode** (override `RESEND_API_KEY=""`) | ✅ boot "Modo DIRECT" → POST → 2× `EmailLog` SENT inmediato SIN providerId + log Pino `event: email.direct`, no se tocó Redis |
+| 4 | **Retry path** (`RESEND_API_KEY="re_invalid_..."`) | ✅ 3 attempts visibles en logs con `event: email.attempt_failed` (attemptsMade 1/2/3), backoff ~2s/4s/8s → `EmailLog` FAILED con `error: "Resend error: API key is invalid"` |
+| 5 | `npm run emails:dev` | ✅ React Email 3.0.2 ready en 0.3s → `localhost:3010` HTTP 200, preview server sirviendo templates |
+
+### 6. Cleanup post-tests
+
+- 3 appointments borrados (queue mode test + direct mode test + retry test)
+- 6 EmailLog asociados a appointments borrados
+- AuditLog de sesión 2 preservado (3 entries)
+
+### Decisiones técnicas registradas
+
+Ver memoria `project_decisions.md` para contexto completo:
+
+1. **Dual mode automático por RESEND_API_KEY** — sin feature flag explícito. Una sola fuente de verdad (presencia de la key) evita inconsistencias.
+2. **React 19 alineado con react-email CLI** — no 18. Evita ERESOLVE y unifica lo que corre en dev (CLI) con lo que usa el processor (render).
+3. **Reutilizamos la decisión de sesión 2**: stub → completo sin cambios de contrato confirma que el contrato `enqueue()` era estable.
+
+### Estado al cerrar la sesión
+
+- ✅ EmailsModule completo con dual mode funcionando end-to-end contra servicios reales (Neon + Redis local + Resend API).
+- ✅ 5 templates React Email rendereando HTML válido.
+- ✅ `AppointmentsService` callsites intactos (dual mode transparente).
+- ⏳ Commits 2 (feat) + 3 (docs) push pendientes de Railway preparado con Redis addon + env vars.
+- ⏳ Próximo: **B-2 SubmissionsModule** (2-3 hs) y **B-3 UsersModule admin** (2 hs, paralelizable con B-2).
+
+### Deuda abierta (nueva)
+
+- `EmailKind` enum sin `APPOINTMENT_REPROGRAMMED` — reprogram reusa `APPOINTMENT_CONFIRMATION` con `payload.reprogrammed: true`. Para métricas, idealmente agregar enum value o columna `metadata` en `EmailLog`. Deuda chica para B-5 o post-B-3.
+- `tsconfig.json` tiene `jsx: react-jsx` global — sin efectos negativos hasta ahora, pero si aparecen errores raros, considerar `tsconfig.emails.json` aparte.
+- `npm audit` reporta 32 vulnerabilidades (4 low, 19 moderate, 7 high, 2 critical) probablemente en transitivas de `react-email` CLI — revisar en un slot de mantenimiento.
 
 ---
 
