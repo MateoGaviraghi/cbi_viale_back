@@ -63,12 +63,10 @@ export class EmailsService {
       return
     }
 
-    await this.queue.add(EMAIL_JOB_NAME, {
-      emailLogId: log.id,
-      kind: params.kind,
-      to: params.to,
-      subject: params.subject,
-      payload: params.payload,
-    })
+    // TS pierde la correlación kind ↔ payload al reconstruir el objeto desde
+    // un union discriminado (limitación conocida). `params` ya fue validado al
+    // entrar por el tipo del argumento — la re-afirmación acá es segura.
+    const jobData = { emailLogId: log.id, ...params } as EmailJobData
+    await this.queue.add(EMAIL_JOB_NAME, jobData)
   }
 }

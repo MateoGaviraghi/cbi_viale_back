@@ -185,13 +185,14 @@ export class AppointmentsService {
     )
 
     // Emails fuera de la transacción — no bloquean el response.
+    // `appointmentId` va en el top-level de EnqueueParams (para EmailLog),
+    // NO en el payload (el template no lo consume).
     await this.emails.enqueue({
       kind: 'APPOINTMENT_CONFIRMATION',
       to: appointment.patientEmail,
       subject: `Turno registrado — ${service.name} · CBI Viale`,
       appointmentId: appointment.id,
       payload: {
-        appointmentId: appointment.id,
         service: service.name,
         date: appointment.date,
         patient: appointment.patientName,
@@ -205,11 +206,8 @@ export class AppointmentsService {
         to: businessEmail,
         subject: `Nuevo turno — ${service.name}`,
         appointmentId: appointment.id,
-        // `variant` es el discriminador del union del template InternalNotification.
-        // Sin esto el template cae al branch submission (default) y renderiza campos vacíos.
         payload: {
           variant: 'appointment',
-          appointmentId: appointment.id,
           service: service.name,
           patient: appointment.patientName,
           dni: appointment.patientDni,
@@ -335,7 +333,6 @@ export class AppointmentsService {
       subject: `Turno cancelado — ${existing.service.name} · CBI Viale`,
       appointmentId: id,
       payload: {
-        appointmentId: id,
         service: existing.service.name,
         date: existing.date,
         patient: existing.patientName,
@@ -386,18 +383,18 @@ export class AppointmentsService {
       { isolationLevel: 'Serializable' },
     )
 
-    // Reusamos APPOINTMENT_CONFIRMATION con flag reprogrammed en payload
-    // (el enum Prisma EmailKind no tiene APPOINTMENT_REPROGRAMMED — se suma en B2 si hace falta).
+    // Reusamos APPOINTMENT_CONFIRMATION con flag reprogrammed en payload.
+    // El template consume `date` (nueva fecha) + `oldDate` (previa) + `reprogrammed: true`.
+    // `newDate` no existe como prop — el TS narrowing nos lo hubiera marcado antes.
     await this.emails.enqueue({
       kind: 'APPOINTMENT_CONFIRMATION',
       to: existing.patientEmail,
       subject: `Turno reprogramado — ${existing.service.name} · CBI Viale`,
       appointmentId: id,
       payload: {
-        appointmentId: id,
         service: existing.service.name,
+        date: dto.date,
         oldDate,
-        newDate: dto.date,
         patient: existing.patientName,
         reprogrammed: true,
       },
