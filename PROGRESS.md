@@ -13,8 +13,8 @@ Documento vivo del avance del backend. Actualizado tras cada unidad de trabajo s
 | Skeleton (Nest + Fastify + Prisma + Auth + Services + Health) | ✅ en `main` |
 | AvailabilityModule (CRUD admin + lectura pública) | ✅ en `main` |
 | AppointmentsModule (turnos + algoritmo de slots ARG-tz) | ✅ en `main` |
-| EmailsModule completo (BullMQ + Resend + 5 templates React Email) | ✅ local · pendiente push |
-| SubmissionsModule | 🔴 próximo (B-2) |
+| EmailsModule completo (BullMQ + Resend + 5 templates React Email) | ✅ en `main` |
+| SubmissionsModule (B-2, CRUD público + admin + emails) | ✅ local · pendiente push |
 | UsersModule (endpoints admin) | 🔴 Fase 1 (B-3) |
 | CronModule (recordatorios 24h) | 🟡 Fase 2 |
 | AuditLogModule (helper + endpoints admin) | 🟡 Fase 2 |
@@ -24,6 +24,146 @@ Documento vivo del avance del backend. Actualizado tras cada unidad de trabajo s
 | Deploy Railway auto desde `main` | Pendiente de verificar primer build |
 
 **Repo:** [MateoGaviraghi/cbi_viale_back](https://github.com/MateoGaviraghi/cbi_viale_back) · branch `main`.
+
+---
+
+## 2026-04-23 · Sesión 4 — SubmissionsModule (B-2) + refactor tipado emails
+
+### Contexto de entrada
+
+Sesión 3 (EmailsModule real) pusheada con hotfix `a966e33` del bug de variant en INTERNAL_NOTIFICATION. User confirmó queue mode E2E funcionando en prod. Pidió B-2 en paralelo con un requisito claro: bundlear el refactor de tipado de emails en la misma sesión para que el mismo tipo de bug (discriminador faltante en payload) no vuelva a aparecer al escribir el callsite de INTERNAL_NOTIFICATION variant=submission.
+
+### 1. Plan aprobado
+
+- SubmissionsModule con 4 endpoints (POST público throttle 10/min, GET/GET-by-id/PATCH admin con `manageSubmissions`).
+- DTOs: create (con validaciones SERVICE_INQUIRY requiere serviceSlug, extraData <10KB), update (solo status), filters (type/status/serviceSlug/dateFrom/dateTo/q).
+- Service con auto-seteo de `answeredAt`/`answeredBy` en primera transición a ANSWERED (idempotente).
+- Audit log `SUBMISSION_PATCH` con `{fromStatus, toStatus}`.
+- Emails: `FORM_RECEIPT` al submitter + `INTERNAL_NOTIFICATION variant:submission` al negocio.
+- 3 preguntas resueltas: notas internas como deuda (columna no existe), CONSENT tratado genérico por ahora, no agregar dedup (throttle global alcanza).
+
+### 2. Refactor · `EmailEnqueueParams` discriminado por `kind`
+
+**Antes:**
+```ts
+interface EmailEnqueueParams {
+  kind: EmailKind
+  to: string
+  subject: string
+  payload: Record<string, unknown>   // ← loose typing que dejó pasar el bug de variant
+}
+```
+
+**Después:**
+```ts
+interface BaseEnqueueParams { to: string; subject: string; appointmentId?: string }
+
+export type EmailEnqueueParams =
+  | (BaseEnqueueParams & { kind: 'APPOINTMENT_CONFIRMATION'; payload: AppointmentConfirmationProps })
+  | (BaseEnqueueParams & { kind: 'APPOINTMENT_CANCELLED';    payload: AppointmentCancelledProps })
+  | (BaseEnqueueParams & { kind: 'APPOINTMENT_REMINDER_24H'; payload: AppointmentReminder24hProps })
+  | (BaseEnqueueParams & { kind: 'FORM_RECEIPT';             payload: FormSubmissionReceiptProps })
+  | (BaseEnqueueParams & { kind: 'INTERNAL_NOTIFICATION';    payload: InternalNotificationProps })
+```
+
+**Impacto:**
+- **Processor dispatch** ahora type-safe: `switch (data.kind)` narrow `data.payload` al tipo exacto. Sin `as never`.
+- **Callsites de AppointmentsService limpiados**: los payloads incluían `appointmentId` que no estaba en ningún `<Kind>Props`. Removido (queda en top-level `BaseEnqueueParams.appointmentId` para `EmailLog.appointmentId`).
+- **Bug latente descubierto**: `reprogram()` encolaba `payload: { newDate: dto.date, oldDate, ... }`, pero `AppointmentConfirmationProps` tiene `{ date, oldDate? }`. Sin el refactor, el email de reprogram mostraba la fecha vieja (template ignora `newDate` y usa `props.date`, que no estaba seteado). Fix en el mismo commit: `payload: { date: dto.date, oldDate, reprogrammed: true }`. El TS narrowing hubiera cazado el bug si hubiéramos tenido tipado desde el día 1.
+- **Limitación TS conocida** al spread de unions discriminados: `{emailLogId, ...params}` pierde la correlación kind↔payload. Resuelto con `as EmailJobData` contenido + comentario en `EmailsService.enqueue`. El cast es seguro por construcción (params ya pasó el type check al entrar).
+
+### 3. Implementación · SubmissionsModule
+
+**Archivos creados (6):**
+
+```
+src/submissions/
+├── submissions.module.ts
+├── submissions.controller.ts
+├── submissions.service.ts
+└── dto/
+    ├── create-submission.dto.ts
+    ├── update-submission.dto.ts
+    └── submission-filters.dto.ts
+```
+
+**Endpoints resultantes** (todos bajo `/api/v1/submissions`):
+
+| Método | Path | Auth | Throttle |
+|---|---|---|---|
+| `POST` | `/` | `@Public()` | **10/min strict** |
+| `GET` | `/` | `manageSubmissions` | default |
+| `GET` | `/:id` | `manageSubmissions` | default |
+| `PATCH` | `/:id` | `manageSubmissions` | default |
+
+**`SubmissionsService.create` flow:**
+
+1. Si `type === 'SERVICE_INQUIRY'` y no hay `serviceSlug` → 400.
+2. Si hay `serviceSlug` → `services.findBySlugOrThrow()` (heredan 404 si inválido/inactivo).
+3. Chequear `JSON.stringify(extraData).length < 10_000` bytes.
+4. `prisma.formSubmission.create` con status PENDING.
+5. Encolar `FORM_RECEIPT` al submitter + `INTERNAL_NOTIFICATION variant:submission` a `BUSINESS_NOTIFICATION_EMAIL` (si está seteado).
+
+**`SubmissionsService.update`:**
+- PATCH vacío → noop, devuelve existing.
+- `status === 'ANSWERED'` Y `existing.status !== 'ANSWERED'` → setea `answeredAt: now, answeredBy: userId`.
+- Re-patch a ANSWERED es idempotente (no re-escribe timestamp). Preserva histórico.
+- Audit log en toda mutación (incluso idempotente, para trazar intentos).
+
+### 4. Pruebas · 16/16 OK
+
+Login admin + tests contra Neon + Redis local + Resend:
+
+| # | Check | Resultado |
+|---|---|---|
+| 1 | POST CONTACT_GENERAL a `mateogaviraghi24@gmail.com` | 201 PENDING |
+| 2 | POST SERVICE_INQUIRY sin serviceSlug | **400** "type SERVICE_INQUIRY requiere serviceSlug" |
+| 3 | POST SERVICE_INQUIRY con `clinica-humana` | 201 con serviceId seteado |
+| 4 | POST slug inválido "servicio-inexistente" | **404** "Servicio ... no existe" |
+| 5 | POST email inválido "not-an-email" | **400** "Email inválido" |
+| 6 | POST con `extraData.note` de 11000 chars | **400** "extraData excede el tamaño máximo (10KB stringified)" |
+| 7 | GET admin paginado `?pageSize=5` | 200 · `meta:{total:5, page:1, totalPages:1}` |
+| 8 | GET admin `?type=SERVICE_INQUIRY` | 200 · `total:2`, todos matchean tipo |
+| 9 | GET admin `?q=pedro` (case-insensitive) | 200 · `total:2` |
+| 10 | GET `/:id` admin | 200 · con service included |
+| 11 | PATCH `status=ANSWERED` | 200 · `answeredAt` seteado, `answeredBy=userId`, AuditLog |
+| 12 | PATCH `status=ANSWERED` otra vez | 200 · `answeredAt` **NO** cambia (idempotente) |
+| 13 | PATCH `status=ARCHIVED` | 200 · AuditLog |
+| 14 | GET admin sin cookie | **401** |
+| 15 | **Queue mode E2E real** con Resend | 6 SENT a owner con providerIds · 2 FAILED a no-owner (sandbox limit) |
+| 16 | Render tests locales | variant submission ✅ · variant appointment regresión ✅ · FormSubmissionReceipt ✅ |
+
+**Bonus del test 15**: sandbox de Resend sin dominio verificado rejecta sends a emails no-owner con "You can only send testing emails to your own email address". El email interno al negocio (owner) llegó siempre. El receipt al submitter (no-owner) falló con 3 attempts → EmailLog FAILED — valida el retry path orgánicamente. Se resuelve cuando Fase 4 verifique el dominio `cbiviale.com.ar`.
+
+**Audit log verificado**: 3 `SUBMISSION_PATCH` entries con metadata `{fromStatus, toStatus}`:
+- `{PENDING → ANSWERED}` — primera transición
+- `{ANSWERED → ANSWERED}` — re-patch idempotente (timestamp preservado, auditado igual)
+- `{ANSWERED → ARCHIVED}`
+
+**Cleanup**: 10 EmailLog + 5 FormSubmission borrados.
+
+### 5. Incidente sin impacto
+
+Mientras arrancaba tests, Redis container estaba apagado (Docker Desktop cerrado entre sesiones). POST quedó colgado en `ECONNREFUSED 127.0.0.1:6379`. User reinició Docker, container levantó, PONG OK, seguí. Sin efecto en código.
+
+### Decisiones registradas
+
+Ver memoria `project_decisions.md`:
+
+1. **Refactor tipado aplicado** — la deuda de sesión 3 resuelta. Incluyó fix del bug latente de `newDate` en reprogram.
+2. **`as EmailJobData` en enqueue** — cast contenido por limitación TS al spread de unions discriminados.
+3. **Union simple sin genéricos** — `enqueue<K extends EmailKind>(Extract<...>)` no suma en DX vs `enqueue(params: EmailEnqueueParams)` con narrow.
+
+### Estado al cerrar
+
+- ✅ SubmissionsModule completo + refactor de tipado aplicado.
+- ✅ 16/16 checks, queue mode E2E validado, 3 render tests.
+- ⏳ 3 commits listos, pendientes de OK del user para pushear a Railway.
+- ⏳ Próximo: **B-3 UsersModule endpoints admin** — único módulo Fase 1 restante.
+
+### Deuda nueva
+
+- Sandbox Resend solo permite envío al owner hasta que se verifique el dominio `cbiviale.com.ar` (Fase 4). En prod hoy: emails internos al negocio OK, receipts al submitter fallan silenciosamente (3 attempts + EmailLog FAILED). El front debería saberlo para no prometerle al user "te llegó un email" en el UI de éxito.
 
 ---
 
