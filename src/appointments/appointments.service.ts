@@ -205,7 +205,10 @@ export class AppointmentsService {
         to: businessEmail,
         subject: `Nuevo turno — ${service.name}`,
         appointmentId: appointment.id,
+        // `variant` es el discriminador del union del template InternalNotification.
+        // Sin esto el template cae al branch submission (default) y renderiza campos vacíos.
         payload: {
+          variant: 'appointment',
           appointmentId: appointment.id,
           service: service.name,
           patient: appointment.patientName,

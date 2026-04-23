@@ -201,6 +201,18 @@ Script `emails:dev` cambió a `npx react-email@latest dev --dir src/emails/templ
 
 Trade-off aceptado: primera ejecución de `npm run emails:dev` tarda un poco más (descarga `react-email` y sus ~50MB de deps a cache de npx). Subsecuentes usan cache. A cambio, el deploy productivo queda sin `next` ni ~200 transitivas Next-related, y futuros CVEs de Next no bloquean Railway.
 
+### Bugfix post-deploy · `INTERNAL_NOTIFICATION` renderiza branch equivocado
+
+Deploy de Railway en prod subió OK, emails fluyen end-to-end, pero el user detectó que el email interno al negocio (`INTERNAL_NOTIFICATION` variant `appointment`) mostraba el header "Nueva consulta desde el sitio" y campos vacíos (TIPO, NOMBRE, MENSAJE) en vez del bloque de appointment.
+
+**Causa:** `AppointmentsService.create` encolaba `INTERNAL_NOTIFICATION` con un payload que NO incluía `variant: 'appointment'`. El template `InternalNotification` tiene un discriminated union `{variant: 'appointment' | 'submission'}`, y en JS `undefined !== 'appointment'` hace que el `if (props.variant === 'appointment')` evalúe falso y caiga al branch submission (default).
+
+**Fix:** agregado `variant: 'appointment'` al payload. Verificado localmente con render directo: el HTML generado contiene "Nuevo turno agendado" + DNI + paciente, y NO contiene "Nueva consulta desde el sitio".
+
+**Raíz del problema:** `EmailEnqueueParams.payload` está tipado como `Record<string, unknown>` (loose). El discriminador `variant` se pierde al pasar por esa puerta. Deuda: reemplazar `EmailEnqueueParams` por un union discriminado por `kind` que fuerce el shape del payload en compile-time. Así este tipo de bug no vuelve a pasar.
+
+El email al paciente (`APPOINTMENT_CONFIRMATION`) no tenía este problema — su template no es un discriminated union.
+
 ---
 
 ## 2026-04-22 · Sesión 2 — AppointmentsModule + EmailsModule stub
