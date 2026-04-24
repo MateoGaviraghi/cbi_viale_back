@@ -12,16 +12,36 @@ const SLUG_MAP: Record<string, ServiceSlug> = {
   genetica: 'GENETICA',
 }
 
+// Mapa inverso: enum Prisma → kebab-case para exponer al front.
+// El endpoint acepta kebab-case, así que el response debería usar el MISMO formato
+// que el input (evita que el front mantenga un mapa bidireccional).
+const ENUM_TO_SLUG: Record<ServiceSlug, string> = {
+  CLINICA_HUMANA: 'clinica-humana',
+  VETERINARIA: 'veterinaria',
+  AGRO_ALIMENTOS: 'agro-alimentos',
+  AMBIENTAL: 'ambiental',
+  MEDICINA_REGENERATIVA: 'medicina-regenerativa',
+  GENETICA: 'genetica',
+}
+
+// Shape público: idéntico a Service pero con slug como string kebab-case.
+export type PublicService = Omit<Service, 'slug'> & { slug: string }
+
+function toPublicService<T extends { slug: ServiceSlug }>(s: T): Omit<T, 'slug'> & { slug: string } {
+  return { ...s, slug: ENUM_TO_SLUG[s.slug] }
+}
+
 @Injectable()
 export class ServicesService {
   constructor(private readonly prisma: PrismaService) {}
 
-  /** Lista todos los servicios activos, ordenados por `order`. Incluye conteos de análisis/imágenes. */
-  listActive(): Promise<Service[]> {
-    return this.prisma.service.findMany({
+  /** Lista todos los servicios activos, ordenados por `order`. Slug expuesto en kebab-case. */
+  async listActive(): Promise<PublicService[]> {
+    const services = await this.prisma.service.findMany({
       where: { active: true },
       orderBy: { order: 'asc' },
     })
+    return services.map(toPublicService)
   }
 
   async findBySlugOrThrow(slug: string) {
@@ -38,6 +58,6 @@ export class ServicesService {
     if (!service || !service.active) {
       throw new NotFoundException(`Servicio "${slug}" no disponible`)
     }
-    return service
+    return toPublicService(service)
   }
 }
