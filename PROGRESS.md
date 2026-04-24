@@ -14,16 +14,174 @@ Documento vivo del avance del backend. Actualizado tras cada unidad de trabajo s
 | AvailabilityModule (CRUD admin + lectura pública) | ✅ en `main` |
 | AppointmentsModule (turnos + algoritmo de slots ARG-tz) | ✅ en `main` |
 | EmailsModule completo (BullMQ + Resend + 5 templates React Email) | ✅ en `main` |
-| SubmissionsModule (B-2, CRUD público + admin + emails) | ✅ local · pendiente push |
+| SubmissionsModule (B-2, CRUD público + admin + emails) | ✅ en `main` |
 | UsersModule (endpoints admin) | 🔴 Fase 1 (B-3) |
 | CronModule (recordatorios 24h) | 🟡 Fase 2 |
 | AuditLogModule (helper + endpoints admin) | 🟡 Fase 2 |
 | ExportsModule (PDF/Excel a R2) | 🟡 Fase 2 |
 | AnalyticsModule (PageView + dashboard) | 🟢 Fase 3 |
 | Sentry integration | 🟢 Fase 3 |
-| Deploy Railway auto desde `main` | Pendiente de verificar primer build |
+| Deploy Railway auto desde `main` | ✅ vivo en `https://cbivialeback-production.up.railway.app` |
+| Front en Vercel con rewrite proxy | ✅ vivo en `https://cbi-viale-front.vercel.app` |
 
 **Repo:** [MateoGaviraghi/cbi_viale_back](https://github.com/MateoGaviraghi/cbi_viale_back) · branch `main`.
+
+---
+
+## 2026-04-24 · Sesión 5b — QA end-to-end endpoints públicos + fix slug response + cleanup
+
+### Contexto
+
+Sesión 5a dejó prod estable con fix de health + cookies pusheados. User pidió QA exhaustivo de todos los endpoints públicos antes de entregar Etapa 1, validando envelope, códigos HTTP y mensajes de error contra el flow real (front Vercel via rewrite → back Railway).
+
+### 1. Batería de 23 tests · todos verdes
+
+| Endpoint | Caso | HTTP | Validación |
+|---|---|---|---|
+| `GET /services` | Lista | 200 | `{data:[...], meta:{total:6}}` |
+| `GET /services/:slug` × 6 | Cada slug válido | 200 | envelope `{data:{...}}` con `requiresConsent` y `durationMinutes` correctos |
+| `GET /services/no-existe` | Slug inválido | 404 | `"Servicio \"no-existe\" no existe"` |
+| `GET /appointments/availability/clinica-humana?month=2026-05` | Mes válido | 200 | 31 días, 26 con slots, primer slot 07:30 |
+| `POST /appointments` | Válido | 201 | turno PENDING creado, emails encolados |
+| `POST /appointments` | Mismo slot (duplicado) | 409 | `"Ese turno ya fue tomado por otro paciente"` |
+| `POST /appointments` | Fecha pasada | 400 | `"El turno debe agendarse a futuro"` |
+| `POST /appointments` | DNI con letras | 400 | `["DNI debe tener 7 u 8 dígitos"]` |
+| `POST /appointments` | Domingo (fuera rule) | 400 | `"No hay disponibilidad en ese horario para este servicio"` |
+| `POST /appointments` | Medicina-regen sin consent | 400 | `"Este servicio requiere consentimiento explícito"` |
+| `POST /submissions` × 4 tipos | `CONTACT_GENERAL`, `SERVICE_INQUIRY`, `CONSENT`, `CUSTOM` | 201 | `status: PENDING`, `extraData` preservada |
+| `POST /submissions` | SERVICE_INQUIRY sin slug | 400 | `"type SERVICE_INQUIRY requiere serviceSlug"` |
+| `POST /submissions` | Email inválido | 400 | `["Email inválido"]` |
+| `POST /submissions` | Tipo inexistente `QUOTE_REQUEST` | 400 | Lista los 4 válidos |
+| `POST /submissions` | Prop extra `malicious_field` | 400 | Whitelist rechaza |
+
+### 2. Discrepancia detectada y fixeada · `slug` en response
+
+`GET /services` devolvía `slug: "CLINICA_HUMANA"` (enum Prisma) pero el endpoint acepta `"clinica-humana"` (kebab). Regla del API: input y output deben usar el mismo formato.
+
+**Fix en [`src/services/services.service.ts`](src/services/services.service.ts):**
+- Mapa inverso `ENUM_TO_SLUG: Record<ServiceSlug, string>`.
+- Helper `toPublicService()` que mapea `slug` enum → kebab.
+- Tipo público `PublicService = Omit<Service, 'slug'> & { slug: string }`.
+- `listActive()` y `findBySlugOrThrow()` devuelven `PublicService`.
+
+Grep confirmó que ningún consumer interno usa `.slug` del objeto devuelto — solo `.id`, `.durationMinutes`, `.requiresConsent`. Cambio safe en runtime, type-check limpio.
+
+### 3. Discrepancia descartada · throttler comparte IP via Vercel proxy
+
+Hipótesis inicial: como el back recibe requests desde la IP de Vercel (proxy rewrite), el contador del throttler agruparía a todos los usuarios.
+
+**Verificado:** `@nestjs/throttler` usa `req.ip` del adapter Fastify, y `trustProxy: true` en [`main.ts:29`](src/main.ts#L29) hace que Fastify lea `X-Forwarded-For`. El chain `Browser → Vercel edge → Railway edge → Fastify` apila IPs correctamente y `req.ip` resuelve a la IP real del cliente. NO hay bug. NO hay fix necesario.
+
+### 4. Corrección de memoria · `FormType` tiene **4** valores, no 2
+
+Mi memoria decía `FormType = { CONTACT_GENERAL, SERVICE_INQUIRY }`. El enum Prisma real tiene **4**: `CONTACT_GENERAL`, `SERVICE_INQUIRY`, `CONSENT`, `CUSTOM`. Descubierto en el test 10 cuando envié un tipo inválido y el error listó los válidos. `project_modules_status.md` actualizado.
+
+### 5. Discrepancia documentada (NO requiere fix) · `message` string vs array
+
+- Errores de negocio del service: `message: string` (`"El turno debe agendarse a futuro"`)
+- Errores de class-validator: `message: string[]` (`["Email inválido"]`)
+
+Es comportamiento estándar de Nest. El front debe hacer `Array.isArray(msg) ? msg.join(', ') : msg`. Documentar en el onboarding del dev del front.
+
+### 6. Cleanup de data QA
+
+Via admin API:
+- Login como `admin@cbiviale.com.ar`.
+- `POST /appointments/:id/cancel` → 1 appointment CANCELLED.
+- `PATCH /submissions/:id` × 4 → 4 submissions ARCHIVED.
+- Verificado: 0 PENDING con `email=qa-endtoend@test.com`.
+
+EmailLog dejado intacto (trazabilidad). Emails reales recibidos en `mateogaviraghi24@gmail.com` (Resend sandbox solo envía al owner — limitación conocida hasta DNS de `cbiviale.com.ar`).
+
+### Estado al cerrar sesión 5b
+
+- ✅ 23/23 tests públicos OK contra prod.
+- ✅ Slug kebab-case consistente input/output.
+- ✅ Throttler confirmado (usa IP real del cliente).
+- ✅ Memoria actualizada con los 4 `FormType` reales.
+- ✅ Data QA limpiada.
+- ⏳ Commit + push del fix slug pendiente de OK del user.
+- ⏳ Próximo: **B-3 UsersModule endpoints admin** (último módulo de Fase 1).
+
+### Decisiones registradas
+
+Ver [memoria/project_decisions.md](.claude/projects/.../memory/project_decisions.md):
+- `toPublicService()` + `ENUM_TO_SLUG` — regla general: formato de entrada y salida debe coincidir. Enum Prisma es detalle de implementación.
+
+---
+
+## 2026-04-24 · Sesión 5 — Deploy prod Railway+Vercel end-to-end + fix health + fix cookies
+
+### Contexto de entrada
+
+Sesión 4 (Submissions + refactor de tipado de emails) pusheada en `1d99c13`. El back estaba desplegado en Railway (`cbivialeback-production.up.railway.app`) y el front en Vercel (`cbi-viale-front.vercel.app`) pero sin verificar end-to-end. El user pidió auditar configs y hacer las pruebas.
+
+### 1. Auditoría de env vars · higiene de secrets
+
+Detectado en Vercel: el front tenía **24 env vars del back** (`JWT_SECRET`, `DATABASE_URL`, `DIRECT_URL`, `RESEND_*`, `REDIS_*`, `AUTH_SECRET`, `AUTH_TRUST_HOST`, `CRON_SECRET`, `COOKIE_*`, `CORS_ORIGINS`, `BUSINESS_NOTIFICATION_EMAIL`, etc.). Verificado via `grep` en el código del front que **ninguna** se referencia — solo aparecen en docs (`TAREAS.md`, `PLAN.md`). El front usa únicamente `API_URL` (destino del rewrite Next) y `NEXT_PUBLIC_SITE_URL` (SEO).
+
+**Resultado:** lista de purga entregada al user (24 vars a borrar), confirmado que son 100% residuo del scaffold inicial + remanentes de NextAuth. Retracté una recomendación temprana (`COOKIE_SAMESITE=none`) al darme cuenta que el front usa rewrites Next → para el browser todo es mismo-origen → `SameSite=Lax` actual alcanza.
+
+### 2. Bug crítico · `Domain=localhost\t` en `Set-Cookie` prod
+
+Al testear login directo en `cbivialeback-production.up.railway.app/api/v1/auth/login` el back devolvía 200 con user correcto, pero el header `Set-Cookie` salía con `Domain=localhost\t; Path=/; HttpOnly; Secure; SameSite=Lax` — tab invisible pegado al valor (copy-paste desde el `.env` local al dashboard de Railway lo metió).
+
+Efecto: el código hacía `domain === 'localhost' ? undefined : domain`. Como el valor real era `'localhost\t'`, la comparación strict fallaba y Fastify escribía `Domain=localhost` literal en el header. Browser rechaza silenciosamente (domain no matchea el host real) → sesión nunca se guarda → 401 en siguientes requests.
+
+**Fix [`src/auth/auth.service.ts`](src/auth/auth.service.ts):** helper privado `resolveCookieDomain()` que aplica `.trim()` al raw value y trata `'localhost'` **y string vacío** como `undefined` (cookie host-only del dominio del request, que es lo que queremos cross-domain). `attachAuthCookies` y `clearAuthCookies` comparten el helper. Defensa en profundidad: aunque Railway meta whitespace de vuelta, el código lo neutraliza.
+
+### 3. Deuda cerrada · `/health/liveness` y `/health/readiness` devolvían 404
+
+Arrastrado desde sesión 1. El `main.ts` tenía `setGlobalPrefix('api', { exclude: ['health', 'health/liveness', 'health/readiness'] })` pero `enableVersioning({ type: URI, defaultVersion: '1' })` aplicaba a **todos** los controllers sin versión declarada — los health quedaban en `/v1/health/*` en vez de `/health/*`. Railway / K8s apuntan sus probes a rutas fijas sin versionar, así que este 404 era bug real no bloqueante.
+
+**Fix [`src/health/health.controller.ts`](src/health/health.controller.ts):** `@Controller({ path: 'health', version: VERSION_NEUTRAL })`. Sale del URI versioning sin tocar los endpoints de negocio.
+
+### 4. Commits + push
+
+```
+3a4d9ad  fix(health): expone /health/liveness y /readiness sin prefijo de version
+6255204  fix(auth): normaliza COOKIE_DOMAIN trimeando whitespace
+```
+
+Railway redeployó en 27s.
+
+### 5. Tests post-deploy (5/5 OK)
+
+| Test | URL | Resultado |
+|---|---|---|
+| Liveness sin `/v1/` | `cbivialeback-.../health/liveness` | 200 · `{status:"ok", ts}` |
+| Readiness con ping Neon | `cbivialeback-.../health/readiness` | 200 · `neon_db: up` |
+| Services catálogo público | `cbivialeback-.../api/v1/services` | 200 · 6 servicios |
+| Services via rewrite Vercel | `cbi-viale-front.vercel.app/api/v1/services` | 200 · mismo JSON |
+| Login directo al back | `POST /api/v1/auth/login` | 200 · cookies **sin** `Domain=` (host-only ✓) |
+| Login via rewrite Vercel | `cbi-viale-front.vercel.app/api/v1/auth/login` | 200 · cookies idénticas |
+
+Verificado que el `Set-Cookie` final sale:
+```
+access_token=...; Max-Age=900; Path=/; HttpOnly; Secure; SameSite=Lax
+refresh_token=...; Max-Age=604800; Path=/api/v1/auth; HttpOnly; Secure; SameSite=Lax
+```
+
+### Decisiones técnicas registradas
+
+Ver `project_decisions.md`:
+- Health fuera de URI versioning via `VERSION_NEUTRAL` (no cambiar a `defaultVersion: VERSION_NEUTRAL` global porque romperíamos el prefix `v1` del resto).
+- `resolveCookieDomain()` helper como única fuente de verdad del dominio de cookies — trim + 'localhost' y '' como undefined. Se eligió mantener `COOKIE_DOMAIN` string para permitir override futuro (custom domain Railway, cbiviale.com.ar post-DNS) sin otro deploy.
+- Front Vercel queda con 2 env vars nada más (`API_URL` + `NEXT_PUBLIC_SITE_URL`). Todo secreto vive solo en Railway.
+
+### Estado al cerrar sesión 5
+
+- ✅ Back y front vivos en prod, comunicándose via rewrite Next.
+- ✅ Cookies HttpOnly+Secure+Lax funcionando cross-deploy (rewrite deja el browser en mismo-origen).
+- ✅ Deuda histórica del `/health/liveness` cerrada.
+- ✅ Higiene de secrets hecha en Vercel (24 vars a purgar identificadas, el user las borra).
+- ⏳ **Pendiente user:** completar la purga en Vercel + setear las 3 vars nuevas en Railway (`COOKIE_DOMAIN=localhost` limpio, `CRON_SECRET` nuevo random, `SWAGGER_PASSWORD`).
+- ⏳ Próximo: **B-3 UsersModule endpoints admin** — último módulo de Fase 1.
+
+### Deuda nueva
+
+- **Ninguna técnica.** Solo el TODO operativo del user de terminar de limpiar Vercel.
+- Nota: si en el futuro se agrega un custom domain `api.cbiviale.com.ar`, setear `COOKIE_DOMAIN=api.cbiviale.com.ar` (literal, sin whitespace) y el helper lo pasa tal cual. Si front y back comparten dominio padre (`cbiviale.com.ar`), podría usarse `COOKIE_DOMAIN=.cbiviale.com.ar` para compartir cookies — decidir en Fase 4 post-DNS.
 
 ---
 
