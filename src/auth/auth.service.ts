@@ -52,13 +52,13 @@ export class AuthService {
    */
   attachAuthCookies(reply: FastifyReply, tokens: AuthTokens): void {
     const secure = this.config.get('COOKIE_SECURE', { infer: true })
-    const domain = this.config.get('COOKIE_DOMAIN', { infer: true })
+    const domain = this.resolveCookieDomain()
 
     const baseOpts = {
       httpOnly: true,
       secure,
       sameSite: 'lax' as const,
-      domain: domain === 'localhost' ? undefined : domain,
+      domain,
       path: '/',
     }
 
@@ -75,9 +75,18 @@ export class AuthService {
   }
 
   clearAuthCookies(reply: FastifyReply): void {
-    const domain = this.config.get('COOKIE_DOMAIN', { infer: true })
-    const opts = { path: '/', domain: domain === 'localhost' ? undefined : domain }
+    const domain = this.resolveCookieDomain()
+    const opts = { path: '/', domain }
     reply.clearCookie('access_token', opts)
     reply.clearCookie('refresh_token', { ...opts, path: '/api/v1/auth' })
+  }
+
+  // Normaliza COOKIE_DOMAIN: trimea whitespace (copy-paste desde Railway suele
+  // dejar tabs), y trata "localhost" y string vacío como "no setear Domain"
+  // (cookie host-only del dominio del request — correcto para prod cross-domain).
+  private resolveCookieDomain(): string | undefined {
+    const raw = this.config.get('COOKIE_DOMAIN', { infer: true }).trim()
+    if (raw === '' || raw === 'localhost') return undefined
+    return raw
   }
 }
