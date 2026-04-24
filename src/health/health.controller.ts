@@ -1,4 +1,4 @@
-import { Controller, Get } from '@nestjs/common'
+import { Controller, Get, VERSION_NEUTRAL } from '@nestjs/common'
 import { ApiOperation, ApiTags } from '@nestjs/swagger'
 import {
   HealthCheck,
@@ -9,7 +9,9 @@ import { Public } from '../common/decorators/public.decorator'
 import { PrismaService } from '../prisma/prisma.service'
 
 @ApiTags('health')
-@Controller('health')
+// VERSION_NEUTRAL: los probes viven en /health/* sin prefijo de versión.
+// Railway / Kubernetes apuntan liveness y readiness a rutas fijas.
+@Controller({ path: 'health', version: VERSION_NEUTRAL })
 export class HealthController {
   constructor(
     private readonly health: HealthCheckService,
