@@ -15,7 +15,7 @@ Documento vivo del avance del backend. Actualizado tras cada unidad de trabajo s
 | AppointmentsModule (turnos + algoritmo de slots ARG-tz) | ✅ en `main` |
 | EmailsModule completo (BullMQ + Resend + 5 templates React Email) | ✅ en `main` |
 | SubmissionsModule (B-2, CRUD público + admin + emails) | ✅ en `main` |
-| UsersModule (endpoints admin) | 🔴 Fase 1 (B-3) |
+| UsersModule (B-3, endpoints admin con soft delete + permissions) | ✅ local · 20/20 tests · pendiente push |
 | CronModule (recordatorios 24h) | 🟡 Fase 2 |
 | AuditLogModule (helper + endpoints admin) | 🟡 Fase 2 |
 | ExportsModule (PDF/Excel a R2) | 🟡 Fase 2 |
@@ -25,6 +25,93 @@ Documento vivo del avance del backend. Actualizado tras cada unidad de trabajo s
 | Front en Vercel con rewrite proxy | ✅ vivo en `https://cbi-viale-front.vercel.app` |
 
 **Repo:** [MateoGaviraghi/cbi_viale_back](https://github.com/MateoGaviraghi/cbi_viale_back) · branch `main`.
+
+---
+
+## 2026-04-28 · Sesión 6 — UsersModule (B-3) · Fase 1 cerrada
+
+### Contexto
+
+Único módulo Fase 1 restante. Plan aprobado con 7 endpoints admin, 5 DTOs, soft delete, audit log inline. 3 decisiones del user:
+1. Password reset NO invalida sesiones activas (simplicidad — deuda Fase 2 si hace falta `tokenVersion`).
+2. NO endpoint self-change-password para employees (seguridad — van con admin).
+3. Limpieza NextAuth pasa a B-4 separado.
+
+### 1. Endpoints
+
+| Método · Path | Auth | Descripción |
+|---|---|---|
+| `GET /users` | `manageUsers` | Lista paginada con filtros `role`, `active`, `q` (search insensitive name/email) |
+| `GET /users/:id` | `manageUsers` | Detalle (sin `passwordHash`) |
+| `POST /users` | `@Roles('ADMIN')` | Crea EMPLOYEE/ADMIN. Bcrypt 10 rounds. 409 email duplicado |
+| `PATCH /users/:id` | `manageUsers` | Update parcial: name, email, role, active. Self-protection + last-admin guard |
+| `PATCH /users/:id/permissions` | `@Roles('ADMIN')` | Reemplaza permissions completo. Whitelist server-side |
+| `PATCH /users/:id/password` | `@Roles('ADMIN')` | Reset admin. Sin loguear pass. NO invalida sesiones |
+| `DELETE /users/:id` | `@Roles('ADMIN')` | Soft delete (`active=false`). Idempotente |
+
+### 2. Convenciones aplicadas
+
+- **`PublicUser` type** = `Omit<User, 'passwordHash' | 'emailVerified' | 'image'>`. Helper `toPublicUser()` aplicado en todo response.
+- **`VALID_PERMISSIONS`** const en `users.service.ts` con las 7 keys (`manageAppointments`, `manageAvailability`, `manageSubmissions`, `manageUsers`, `viewAuditLog`, `exportData`, `viewAnalytics`). Validación server-side: keys fuera tiran 400 con la lista válida en el mensaje.
+- **Last-admin guard** (`ensureAdminCountAfterChange`): bloquea cualquier operación que dejaría 0 ADMINs activos (PATCH role + DELETE).
+- **Self-protection**: nadie puede `active=false` ni DELETE su propio user (403).
+- **Audit log inline** mismo patrón que availability/appointments/submissions: `USER_CREATE`, `USER_UPDATE` (con `changedFields`), `USER_PERMISSIONS_UPDATE` (con `before`/`after`), `USER_PASSWORD_RESET` (metadata vacía — nunca loguear password), `USER_DELETE`.
+
+### 3. Tests funcionales · 20/20 OK contra Neon
+
+Server local en `:3001` apuntando a Neon. Login admin del seed → batería completa:
+
+| # | Caso | HTTP | Resultado |
+|---|---|---|---|
+| 1 | Login admin | 200 | role=ADMIN |
+| 2 | POST crear EMPLOYEE | 201 | passwordHash NO expuesto |
+| 3 | POST email duplicado | 409 | "Ya existe un registro con ese valor único" |
+| 4 | POST password < 8 chars | 400 | "La password debe tener al menos 8 caracteres" |
+| 5 | GET paginado | 200 | passwordHash NO en items |
+| 6 | GET ?q=carla | 200 | match correcto |
+| 7 | GET ?role=EMPLOYEE&active=true | 200 | filtros combinados |
+| 8 | GET /:id | 200 | keys: active, createdAt, email, id, name, permissions, role, updatedAt |
+| 9 | GET /inexistente | 404 | "Usuario no encontrado" |
+| 10 | PATCH name | 200 | audit USER_UPDATE creado |
+| 11 | PATCH email duplicado | 409 | |
+| 12 | PATCH permissions con `{foo:true}` | 400 | "Permisos inválidos: [foo]. Válidos: [...]" |
+| 13 | PATCH permissions con keys válidas | 200 | objeto reemplazado completo |
+| 14 | PATCH password + login con nueva pass | 200 + 200 | OK |
+| 15 | EMPLOYEE intenta GET /users | 403 | "No tenés los permisos necesarios" |
+| 16 | DELETE al propio admin | 403 | "No podés deshabilitar tu propio usuario" |
+| 17 | PATCH role=EMPLOYEE al único ADMIN | 400 | "Debe quedar al menos un administrador activo" |
+| 18 | DELETE soft | 200 | active=false |
+| 19 | Login con user inactivo | 401 | `verifyPassword` filtra por active |
+| 20 | DELETE idempotente | 200 | sin cambios |
+
+### 4. Audit logs verificados
+
+5 logs persistidos en `AuditLog` (entity='User'):
+- `USER_CREATE` · meta `{role, email}`
+- `USER_UPDATE` · meta `{changedFields:["name"]}`
+- `USER_PERMISSIONS_UPDATE` · meta `{before, after}`
+- `USER_PASSWORD_RESET` · meta `{}` (nunca loguear password)
+- `USER_DELETE` · meta `{email}`
+
+### 5. Cleanup
+
+User `qa-b3-carla@test.com` + sus 5 audit logs eliminados de Neon vía script tsx ad-hoc post-test. Server local detenido. Workspace limpio.
+
+### Estado al cerrar sesión 6
+
+- ✅ **Fase 1 completa**. Skeleton + Auth + Services + Health + Availability + Appointments + Emails + Submissions + Users.
+- ✅ Type-check + build limpios al primer intento.
+- ✅ 20/20 tests funcionales OK contra Neon.
+- ⏳ Sin commits hechos. PROGRESS.md actualizado, código listo para commit + deploy.
+- ⏳ Próximo: pedir OK al user para commit + push, smoke-test post-deploy en Railway.
+- 📋 Backlog: **B-4 (limpieza NextAuth)** antes de Fase 2. Después CronModule, AuditLogModule, ExportsModule.
+
+### Decisiones registradas
+
+Ver memoria/`project_decisions.md`:
+- Password reset NO invalida sesiones (Fase 2 si hace falta).
+- NO self-change-password endpoint (seguridad).
+- `VALID_PERMISSIONS` whitelist server-side como fuente de verdad.
 
 ---
 
@@ -93,15 +180,48 @@ Via admin API:
 
 EmailLog dejado intacto (trazabilidad). Emails reales recibidos en `mateogaviraghi24@gmail.com` (Resend sandbox solo envía al owner — limitación conocida hasta DNS de `cbiviale.com.ar`).
 
+### 7. Rate limiting · validado en los 3 endpoints públicos críticos
+
+Curl-loop contra prod, 3 tests con esperas de 65s entre cada uno para que el contador se libere:
+
+| Endpoint | Config | Loop ejecutado | Resultado |
+|---|---|---|---|
+| `POST /submissions` | strict 10/min | × 11 con body `{}` | reqs 1–10 → 400, `x-ratelimit-remaining-strict` 9→0, req 11 → 429 ✅ |
+| `POST /appointments` | strict 10/min | × 11 con body `{}` | idéntico · req 11 → 429 ✅ |
+| `POST /auth/login` | strict 5/min | × 6 con creds inválidas | reqs 1–5 → 401, req 6 → 429 ✅ |
+
+**Confirmado:**
+- El guard `Throttle` corre **antes** de `ValidationPipe` — cuerpos inválidos también consumen el slot del strict-counter (protege contra spam con basura).
+- Header `x-ratelimit-remaining-strict` expuesto en cada response. El front puede leerlo para feedback.
+- Shape del 429: `{ statusCode:429, message:"ThrottlerException: Too Many Requests", error, path, timestamp }` consistente con el resto.
+- Tracker por IP real del cliente (validado en sección 3 vía `trustProxy:true` + `X-Forwarded-For`).
+
+### 8. Discrepancia menor detectada · cold start de Neon
+
+En el primer request del test C, el back devolvió **400** con mensaje técnico de Prisma:
+```
+"Please make sure your database server is running at ep-blue-queen..."
+```
+Es un cold start de Neon (auto-suspend del plan free después de inactividad). El siguiente request (~2s después) ya estaba caliente.
+
+**Opciones evaluadas:**
+1. Ignorar — raro con tráfico real constante.
+2. Migrar a Neon plan paid (sin auto-suspend) — costo recurrente.
+3. Capturar `PrismaClientInitializationError` en `AllExceptionsFilter` → 503 genérico `"Servicio temporalmente no disponible, reintentar"`. ~10 líneas, defensa en profundidad.
+
+**Decisión:** anotada como deuda Fase 2 (decidir con el user). NO bloqueante para Etapa 1.
+
 ### Estado al cerrar sesión 5b
 
 - ✅ 23/23 tests públicos OK contra prod.
+- ✅ Rate limiting validado en `/submissions`, `/appointments`, `/auth/login`.
 - ✅ Slug kebab-case consistente input/output.
 - ✅ Throttler confirmado (usa IP real del cliente).
 - ✅ Memoria actualizada con los 4 `FormType` reales.
 - ✅ Data QA limpiada.
-- ⏳ Commit + push del fix slug pendiente de OK del user.
+- ⏳ Commit + push del fix slug + docs pendiente de OK del user.
 - ⏳ Próximo: **B-3 UsersModule endpoints admin** (último módulo de Fase 1).
+- 📋 Backlog Fase 2: capturar `PrismaClientInitializationError` para enmascarar cold-starts de Neon como 503 amigable.
 
 ### Decisiones registradas
 
