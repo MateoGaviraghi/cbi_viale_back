@@ -12,12 +12,33 @@ import type { Env } from '../config/env.schema'
 import { EmailsService } from '../emails/emails.service'
 import { PrismaService } from '../prisma/prisma.service'
 import { ServicesService } from '../services/services.service'
+import type { CreateAgroFoodSubmissionDto } from './dto/create-agro-food-submission.dto'
+import type { CreateClinicalSubmissionDto } from './dto/create-clinical-submission.dto'
+import type { CreateEnvironmentalSubmissionDto } from './dto/create-environmental-submission.dto'
+import type { CreateGeneticSubmissionDto } from './dto/create-genetic-submission.dto'
 import type { CreateSubmissionDto } from './dto/create-submission.dto'
+import type { CreateUrocultureSubmissionDto } from './dto/create-uroculture-submission.dto'
+import type { CreateVaginalExudateSubmissionDto } from './dto/create-vaginal-exudate-submission.dto'
+import type { CreateVeterinarySubmissionDto } from './dto/create-veterinary-submission.dto'
 import type { SubmissionFiltersDto } from './dto/submission-filters.dto'
 import type { UpdateSubmissionDto } from './dto/update-submission.dto'
 
 /** JSON stringified máximo para extraData. Evita payloads abusivos. */
 const MAX_EXTRA_DATA_BYTES = 10_000
+
+/** Args internos del helper de persistencia + notificación. */
+interface PersistAndNotifyArgs {
+  type: FormType
+  serviceSlug: string | null
+  parentSubmissionId?: string
+  name: string
+  email: string
+  phone: string | null
+  subject?: string
+  message: string
+  consentGiven: boolean
+  extraData: Record<string, unknown>
+}
 
 @Injectable()
 export class SubmissionsService {
@@ -31,7 +52,7 @@ export class SubmissionsService {
   ) {}
 
   // ============================================================================
-  //  Creación pública
+  //  Creación pública — formulario genérico legacy (CONTACT_GENERAL / SERVICE_INQUIRY / CONSENT / CUSTOM)
   // ============================================================================
 
   async create(dto: CreateSubmissionDto): Promise<FormSubmission> {
@@ -66,41 +87,243 @@ export class SubmissionsService {
       },
     })
 
-    // Receipt al submitter.
-    await this.emails.enqueue({
-      kind: 'FORM_RECEIPT',
-      to: submission.email,
-      subject: `Recibimos tu consulta · CBI Viale`,
-      payload: {
-        name: submission.name,
-        subject: submission.subject,
-        message: submission.message,
-        serviceName,
+    await this.notifyOnCreate(submission, serviceName)
+    return submission
+  }
+
+  // ============================================================================
+  //  Formularios específicos por servicio
+  // ============================================================================
+
+  /** CLINICA_HUMANA — paciente humano con foto del pedido médico. */
+  async createClinical(dto: CreateClinicalSubmissionDto): Promise<FormSubmission> {
+    this.assertConsent(dto.consentGiven)
+    return this.persistAndNotify({
+      type: 'CLINICAL',
+      serviceSlug: 'clinica-humana',
+      name: dto.name,
+      email: dto.email,
+      phone: dto.phone,
+      message: this.buildMessage('Solicitud de análisis clínico', dto.observations),
+      consentGiven: dto.consentGiven,
+      extraData: {
+        dni: dto.dni,
+        birthDate: dto.birthDate.toISOString(),
+        healthInsurance: dto.healthInsurance ?? null,
+        requestingDoctor: dto.requestingDoctor ?? null,
+        observations: dto.observations ?? null,
+        medicalOrderUrl: dto.medicalOrderUrl,
       },
     })
+  }
 
-    // Notificación al negocio — solo si la env var está seteada.
-    const businessEmail = this.config.get('BUSINESS_NOTIFICATION_EMAIL', { infer: true })
-    if (businessEmail) {
-      await this.emails.enqueue({
-        kind: 'INTERNAL_NOTIFICATION',
-        to: businessEmail,
-        subject: `Nueva consulta — ${humanFormType(submission.type)}${serviceName ? ` · ${serviceName}` : ''}`,
-        payload: {
-          variant: 'submission',
-          formType: humanFormType(submission.type),
-          name: submission.name,
-          email: submission.email,
-          phone: submission.phone,
-          subject: submission.subject,
-          message: submission.message,
-          serviceName,
-        },
-      })
+  /** UROCULTURE — subform de Clínica Humana. */
+  async createUroculture(dto: CreateUrocultureSubmissionDto): Promise<FormSubmission> {
+    this.assertConsent(dto.consentGiven)
+
+    // Si tiene parent, validamos que exista y sea CLINICAL. Si no, requerimos email/phone.
+    let parentEmail: string | null = null
+    let parentPhone: string | null = null
+    if (dto.parentSubmissionId) {
+      const parent = await this.assertCanLinkToParent(dto.parentSubmissionId)
+      parentEmail = parent.email
+      parentPhone = parent.phone
+    } else {
+      if (!dto.email || !dto.phone) {
+        throw new BadRequestException(
+          'Sin parentSubmissionId, email y phone son obligatorios.',
+        )
+      }
     }
 
-    // No audit log en create público (AuditLog.userId es required + FK a User).
-    return submission
+    return this.persistAndNotify({
+      type: 'UROCULTURE',
+      serviceSlug: 'clinica-humana',
+      parentSubmissionId: dto.parentSubmissionId,
+      name: dto.name,
+      email: dto.email ?? parentEmail!,
+      phone: dto.phone ?? parentPhone,
+      message: 'Subformulario de urocultivo',
+      consentGiven: dto.consentGiven,
+      extraData: {
+        dni: dto.dni,
+        age: dto.age,
+        collectionTime: dto.collectionTime,
+        collectionDate: dto.collectionDate.toISOString(),
+        sampleType: dto.sampleType ?? null,
+        symptoms: dto.symptoms,
+        pregnancy: dto.pregnancy ?? null,
+        previousAntibiotics: dto.previousAntibiotics,
+        baselinePathology: dto.baselinePathology,
+      },
+    })
+  }
+
+  /** VAGINAL_EXUDATE — subform de Clínica Humana. */
+  async createVaginalExudate(
+    dto: CreateVaginalExudateSubmissionDto,
+  ): Promise<FormSubmission> {
+    this.assertConsent(dto.consentGiven)
+
+    let parentName: string | null = null
+    let parentEmail: string | null = null
+    let parentPhone: string | null = null
+    let parentDni: string | null = null
+    if (dto.parentSubmissionId) {
+      const parent = await this.assertCanLinkToParent(dto.parentSubmissionId)
+      parentName = parent.name
+      parentEmail = parent.email
+      parentPhone = parent.phone
+      const extra = parent.extraData as Record<string, unknown> | null
+      parentDni = typeof extra?.dni === 'string' ? extra.dni : null
+    } else {
+      if (!dto.name || !dto.email || !dto.phone) {
+        throw new BadRequestException(
+          'Sin parentSubmissionId, name, email y phone son obligatorios.',
+        )
+      }
+    }
+
+    const finalName = dto.name ?? parentName!
+    const finalEmail = dto.email ?? parentEmail!
+    const finalPhone = dto.phone ?? parentPhone
+
+    return this.persistAndNotify({
+      type: 'VAGINAL_EXUDATE',
+      serviceSlug: 'clinica-humana',
+      parentSubmissionId: dto.parentSubmissionId,
+      name: finalName,
+      email: finalEmail,
+      phone: finalPhone,
+      message: 'Subformulario de exudado vaginal',
+      consentGiven: dto.consentGiven,
+      extraData: {
+        dni: dto.dni ?? parentDni,
+        age: dto.age,
+        lastMenstruationDate: dto.lastMenstruationDate.toISOString(),
+        symptoms: dto.symptoms,
+        pregnancies: dto.pregnancies,
+        flowCharacteristics: dto.flowCharacteristics,
+        contraceptiveUse: dto.contraceptiveUse,
+        vaginalInfectionHistory: dto.vaginalInfectionHistory,
+        abortionCount: dto.abortionCount,
+      },
+    })
+  }
+
+  /** VETERINARY — análisis para animales. */
+  async createVeterinary(dto: CreateVeterinarySubmissionDto): Promise<FormSubmission> {
+    return this.persistAndNotify({
+      type: 'VETERINARY',
+      serviceSlug: 'veterinaria',
+      name: dto.ownerName,
+      email: dto.email,
+      phone: dto.phone,
+      message: this.buildMessage(
+        `Análisis veterinario · ${dto.species} · ${dto.animalName}`,
+        dto.observations,
+      ),
+      consentGiven: false,
+      extraData: {
+        dniOrCuit: dto.dniOrCuit,
+        animalName: dto.animalName,
+        species: dto.species,
+        breed: dto.breed,
+        animalAge: dto.animalAge,
+        requestingVet: dto.requestingVet,
+        sampleType: dto.sampleType,
+        collectionDate: dto.collectionDate.toISOString(),
+        observations: dto.observations ?? null,
+      },
+    })
+  }
+
+  /** AGRO_FOOD — productos alimenticios y materias primas. */
+  async createAgroFood(dto: CreateAgroFoodSubmissionDto): Promise<FormSubmission> {
+    return this.persistAndNotify({
+      type: 'AGRO_FOOD',
+      serviceSlug: 'agro-alimentos',
+      name: dto.companyName,
+      email: dto.email,
+      phone: dto.phone,
+      message: this.buildMessage(
+        `Análisis ${dto.analysisType} · ${dto.productType}`,
+        dto.observations,
+      ),
+      consentGiven: false,
+      extraData: {
+        cuit: dto.cuit,
+        productType: dto.productType,
+        batch: dto.batch ?? null,
+        productionDate: dto.productionDate ? dto.productionDate.toISOString() : null,
+        analysisType: dto.analysisType,
+        sampleQuantity: dto.sampleQuantity,
+        collectionDate: dto.collectionDate.toISOString(),
+        origin: dto.origin ?? null,
+        observations: dto.observations ?? null,
+      },
+    })
+  }
+
+  /** ENVIRONMENTAL — agua, efluentes, muestras ambientales. */
+  async createEnvironmental(
+    dto: CreateEnvironmentalSubmissionDto,
+  ): Promise<FormSubmission> {
+    return this.persistAndNotify({
+      type: 'ENVIRONMENTAL',
+      serviceSlug: 'ambiental',
+      name: dto.companyName,
+      email: dto.email,
+      phone: dto.phone,
+      message: this.buildMessage(
+        `Análisis ${dto.analysisType} · ${dto.sampleType} · ${dto.location}`,
+        dto.observations,
+      ),
+      consentGiven: false,
+      extraData: {
+        cuit: dto.cuit,
+        sampleType: dto.sampleType,
+        samplingPoint: dto.samplingPoint,
+        location: dto.location,
+        collectionDate: dto.collectionDate.toISOString(),
+        collectionTime: dto.collectionTime ?? null,
+        analysisType: dto.analysisType,
+        samplingResponsible: dto.samplingResponsible ?? null,
+        observations: dto.observations ?? null,
+      },
+    })
+  }
+
+  /** GENETIC — estudios genéticos. */
+  async createGenetic(dto: CreateGeneticSubmissionDto): Promise<FormSubmission> {
+    this.assertConsent(dto.consentGiven)
+    return this.persistAndNotify({
+      type: 'GENETIC',
+      serviceSlug: 'genetica',
+      name: dto.name,
+      email: dto.email,
+      phone: dto.phone,
+      message: this.buildMessage(
+        `Estudio genético · ${dto.studyType}`,
+        dto.observations,
+      ),
+      consentGiven: dto.consentGiven,
+      extraData: {
+        dni: dto.dni,
+        studyType: dto.studyType,
+        studyReason: dto.studyReason,
+        sampleRelationship: dto.sampleRelationship ?? null,
+        sampleCount: dto.sampleCount,
+        collectionDate: dto.collectionDate.toISOString(),
+        requestingProfessional: dto.requestingProfessional ?? null,
+        observations: dto.observations ?? null,
+        ethnicity: dto.ethnicity,
+        diseaseStatus: dto.diseaseStatus ?? null,
+        boneMarrowTransplant: dto.boneMarrowTransplant ?? null,
+        studyDetail: dto.studyDetail,
+        previousGeneticStudies: dto.previousGeneticStudies ?? null,
+      },
+    })
   }
 
   // ============================================================================
@@ -155,7 +378,10 @@ export class SubmissionsService {
   async getByIdOrThrow(id: string) {
     const submission = await this.prisma.formSubmission.findUnique({
       where: { id },
-      include: { service: true },
+      include: {
+        service: true,
+        children: { orderBy: { createdAt: 'asc' } },
+      },
     })
     if (!submission) throw new NotFoundException('Consulta no encontrada')
     return submission
@@ -169,12 +395,9 @@ export class SubmissionsService {
     const existing = await this.prisma.formSubmission.findUnique({ where: { id } })
     if (!existing) throw new NotFoundException('Consulta no encontrada')
 
-    // PATCH vacío → devolvemos existing sin auditar (noop).
     if (dto.status === undefined) return existing
 
     const data: Prisma.FormSubmissionUpdateInput = { status: dto.status }
-    // Primera transición a ANSWERED sella timestamp + autor.
-    // Transiciones posteriores a ANSWERED son idempotentes (no re-escriben).
     if (dto.status === 'ANSWERED' && existing.status !== 'ANSWERED') {
       data.answeredAt = new Date()
       data.answeredBy = userId
@@ -186,6 +409,110 @@ export class SubmissionsService {
       toStatus: dto.status,
     })
     return updated
+  }
+
+  // ============================================================================
+  //  Helpers privados
+  // ============================================================================
+
+  private assertConsent(consent: boolean): void {
+    if (!consent) {
+      throw new BadRequestException('Debe aceptar el consentimiento para continuar.')
+    }
+  }
+
+  /**
+   * Valida que el parentSubmissionId apunte a un FormSubmission existente y de
+   * tipo CLINICAL. Devuelve el padre para poder heredar email/phone/dni.
+   */
+  private async assertCanLinkToParent(parentId: string): Promise<FormSubmission> {
+    const parent = await this.prisma.formSubmission.findUnique({ where: { id: parentId } })
+    if (!parent) {
+      throw new BadRequestException('parentSubmissionId no encontrado.')
+    }
+    if (parent.type !== 'CLINICAL') {
+      throw new BadRequestException(
+        'parentSubmissionId debe referenciar un formulario CLINICAL.',
+      )
+    }
+    return parent
+  }
+
+  private buildMessage(headline: string, observations?: string | null): string {
+    if (observations && observations.trim().length > 0) {
+      return `${headline}\n\nObservaciones: ${observations.trim()}`
+    }
+    return headline
+  }
+
+  private async persistAndNotify(args: PersistAndNotifyArgs): Promise<FormSubmission> {
+    if (JSON.stringify(args.extraData).length > MAX_EXTRA_DATA_BYTES) {
+      throw new BadRequestException('extraData excede el tamaño máximo (10KB stringified)')
+    }
+
+    let serviceId: string | null = null
+    let serviceName: string | null = null
+    if (args.serviceSlug) {
+      const svc = await this.services.findBySlugOrThrow(args.serviceSlug)
+      serviceId = svc.id
+      serviceName = svc.name
+    }
+
+    const submission = await this.prisma.formSubmission.create({
+      data: {
+        type: args.type,
+        serviceId,
+        parentSubmissionId: args.parentSubmissionId ?? null,
+        name: args.name,
+        email: args.email,
+        phone: args.phone,
+        subject: args.subject ?? null,
+        message: args.message,
+        consentGiven: args.consentGiven,
+        extraData: args.extraData as Prisma.InputJsonValue,
+        status: 'PENDING',
+      },
+    })
+
+    await this.notifyOnCreate(submission, serviceName)
+    return submission
+  }
+
+  /** Encola FORM_RECEIPT al usuario y INTERNAL_NOTIFICATION al staff. */
+  private async notifyOnCreate(
+    submission: FormSubmission,
+    serviceName: string | null,
+  ): Promise<void> {
+    await this.emails.enqueue({
+      kind: 'FORM_RECEIPT',
+      to: submission.email,
+      subject: `Recibimos tu consulta · CBI Viale`,
+      payload: {
+        name: submission.name,
+        subject: submission.subject,
+        message: submission.message,
+        serviceName,
+      },
+    })
+
+    const businessEmail = this.config.get('BUSINESS_NOTIFICATION_EMAIL', { infer: true })
+    if (businessEmail) {
+      await this.emails.enqueue({
+        kind: 'INTERNAL_NOTIFICATION',
+        to: businessEmail,
+        subject: `Nueva consulta — ${humanFormType(submission.type)}${serviceName ? ` · ${serviceName}` : ''}`,
+        payload: {
+          variant: 'submission',
+          formType: humanFormType(submission.type),
+          name: submission.name,
+          email: submission.email,
+          phone: submission.phone,
+          subject: submission.subject,
+          message: submission.message,
+          serviceName,
+        },
+      })
+    }
   }
 
   private async audit(
@@ -212,5 +539,19 @@ function humanFormType(type: FormType): string {
       return 'Consentimiento'
     case 'CUSTOM':
       return 'Personalizado'
+    case 'CLINICAL':
+      return 'Clínica humana'
+    case 'UROCULTURE':
+      return 'Urocultivo'
+    case 'VAGINAL_EXUDATE':
+      return 'Exudado vaginal'
+    case 'VETERINARY':
+      return 'Veterinaria'
+    case 'AGRO_FOOD':
+      return 'Agro y alimentos'
+    case 'ENVIRONMENTAL':
+      return 'Ambiental'
+    case 'GENETIC':
+      return 'Genética'
   }
 }

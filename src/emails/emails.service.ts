@@ -1,5 +1,5 @@
 import { InjectQueue } from '@nestjs/bullmq'
-import { Injectable, Logger } from '@nestjs/common'
+import { Injectable, Logger, Optional } from '@nestjs/common'
 import { ConfigService } from '@nestjs/config'
 import type { Queue } from 'bullmq'
 import type { Env } from '../config/env.schema'
@@ -25,7 +25,9 @@ export class EmailsService {
   constructor(
     private readonly prisma: PrismaService,
     private readonly config: ConfigService<Env, true>,
-    @InjectQueue(EMAIL_QUEUE_NAME) private readonly queue: Queue<EmailJobData>,
+    // Optional: en modo DIRECT el módulo no registra BullMQ, así que la queue
+    // viene undefined. EmailsService nunca la toca en ese modo.
+    @Optional() @InjectQueue(EMAIL_QUEUE_NAME) private readonly queue?: Queue<EmailJobData>,
   ) {
     const apiKey = this.config.get('RESEND_API_KEY', { infer: true })
     this.isDirectMode = !apiKey || apiKey.trim() === ''
@@ -63,6 +65,12 @@ export class EmailsService {
       return
     }
 
+    // En modo QUEUE la queue siempre está inyectada (EmailsModule.forRoot la
+     // registra cuando RESEND_API_KEY tiene valor). Si llegó hasta acá sin queue
+     // hay un bug de configuración.
+    if (!this.queue) {
+      throw new Error('Modo QUEUE activo pero la queue no fue inyectada (revisar EmailsModule.forRoot)')
+    }
     // TS pierde la correlación kind ↔ payload al reconstruir el objeto desde
     // un union discriminado (limitación conocida). `params` ya fue validado al
     // entrar por el tipo del argumento — la re-afirmación acá es segura.

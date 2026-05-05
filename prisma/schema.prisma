@@ -147,27 +147,27 @@ enum AppointmentStatus {
 }
 
 model Appointment {
-  id            String            @id @default(cuid())
-  serviceId     String
-  date          DateTime
-  durationMin   Int
-  status        AppointmentStatus @default(PENDING)
+  id          String            @id @default(cuid())
+  serviceId   String
+  date        DateTime
+  durationMin Int
+  status      AppointmentStatus @default(PENDING)
 
-  patientName   String
-  patientDni    String
-  patientEmail  String
-  patientPhone  String
-  notes         String?           @db.Text
-  consentGiven  Boolean           @default(false)
+  patientName  String
+  patientDni   String
+  patientEmail String
+  patientPhone String
+  notes        String? @db.Text
+  consentGiven Boolean @default(false)
 
-  createdAt     DateTime          @default(now())
-  updatedAt     DateTime          @updatedAt
-  confirmedAt   DateTime?
-  cancelledAt   DateTime?
-  cancelReason  String?
+  createdAt    DateTime  @default(now())
+  updatedAt    DateTime  @updatedAt
+  confirmedAt  DateTime?
+  cancelledAt  DateTime?
+  cancelReason String?
 
-  service       Service           @relation(fields: [serviceId], references: [id])
-  emailLogs     EmailLog[]
+  service   Service    @relation(fields: [serviceId], references: [id])
+  emailLogs EmailLog[]
 
   @@index([date, status])
   @@index([patientEmail])
@@ -192,13 +192,13 @@ enum Weekday {
 model AvailabilityRule {
   id        String   @id @default(cuid())
   weekday   Weekday
-  startTime String   // "08:00"
-  endTime   String   // "12:00"
-  serviceId String?  // null = aplica a todos los servicios
+  startTime String // "08:00"
+  endTime   String // "12:00"
+  serviceId String? // null = aplica a todos los servicios
   active    Boolean  @default(true)
   createdAt DateTime @default(now())
 
-  service   Service? @relation(fields: [serviceId], references: [id])
+  service Service? @relation(fields: [serviceId], references: [id])
 
   @@index([weekday, active])
   @@index([serviceId])
@@ -213,7 +213,7 @@ model BlockedDate {
   createdBy String
   createdAt DateTime @default(now())
 
-  service   Service? @relation(fields: [serviceId], references: [id])
+  service Service? @relation(fields: [serviceId], references: [id])
 
   @@index([startDate, endDate])
   @@index([serviceId])
@@ -228,6 +228,13 @@ enum FormType {
   SERVICE_INQUIRY
   CONSENT
   CUSTOM
+  CLINICAL
+  UROCULTURE
+  VAGINAL_EXUDATE
+  VETERINARY
+  AGRO_FOOD
+  ENVIRONMENTAL
+  GENETIC
 }
 
 enum FormStatus {
@@ -237,26 +244,31 @@ enum FormStatus {
 }
 
 model FormSubmission {
-  id         String     @id @default(cuid())
-  type       FormType
-  serviceId  String?
-  name       String
-  email      String
-  phone      String?
-  subject    String?
-  message    String     @db.Text
-  extraData  Json       @default("{}")
-  status     FormStatus @default(PENDING)
-  answeredAt DateTime?
-  answeredBy String?
-  createdAt  DateTime   @default(now())
-  updatedAt  DateTime   @updatedAt
+  id                 String     @id @default(cuid())
+  type               FormType
+  serviceId          String?
+  parentSubmissionId String?
+  name               String
+  email              String
+  phone              String?
+  subject            String?
+  message            String     @db.Text
+  consentGiven       Boolean    @default(false)
+  extraData          Json       @default("{}")
+  status             FormStatus @default(PENDING)
+  answeredAt         DateTime?
+  answeredBy         String?
+  createdAt          DateTime   @default(now())
+  updatedAt          DateTime   @updatedAt
 
-  service    Service?   @relation(fields: [serviceId], references: [id])
+  service  Service?         @relation(fields: [serviceId], references: [id])
+  parent   FormSubmission?  @relation("FormSubmissionLinkage", fields: [parentSubmissionId], references: [id])
+  children FormSubmission[] @relation("FormSubmissionLinkage")
 
   @@index([type, status])
   @@index([createdAt])
   @@index([email])
+  @@index([parentSubmissionId])
 }
 
 // ============================================================================
@@ -279,18 +291,18 @@ enum EmailStatus {
 }
 
 model EmailLog {
-  id            String       @id @default(cuid())
+  id            String      @id @default(cuid())
   kind          EmailKind
   to            String
   subject       String
-  status        EmailStatus  @default(QUEUED)
+  status        EmailStatus @default(QUEUED)
   providerId    String?
   error         String?
   appointmentId String?
   sentAt        DateTime?
-  createdAt     DateTime     @default(now())
+  createdAt     DateTime    @default(now())
 
-  appointment   Appointment? @relation(fields: [appointmentId], references: [id])
+  appointment Appointment? @relation(fields: [appointmentId], references: [id])
 
   @@index([appointmentId])
   @@index([status, kind])
@@ -309,7 +321,7 @@ model AuditLog {
   metadata  Json     @default("{}")
   createdAt DateTime @default(now())
 
-  user      User     @relation(fields: [userId], references: [id])
+  user User @relation(fields: [userId], references: [id])
 
   @@index([userId, createdAt])
   @@index([entity, entityId])

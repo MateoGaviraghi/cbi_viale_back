@@ -50,6 +50,15 @@ export const envSchema = z.object({
   // Seed (sólo se usa al correr prisma seed)
   SEED_ADMIN_EMAIL: z.string().email().default('admin@cbiviale.com.ar'),
   SEED_ADMIN_PASSWORD: z.string().min(8).default('cbi-admin-2026'),
+
+  // Cloudinary (uploads de pedido médico — opcional; si están vacías, /uploads/* devuelve 503)
+  CLOUDINARY_CLOUD_NAME: z.string().default(''),
+  CLOUDINARY_API_KEY: z.string().default(''),
+  CLOUDINARY_API_SECRET: z.string().default(''),
+  CLOUDINARY_UPLOAD_FOLDER: z.string().default('cbi-viale/medical-orders'),
+  // Preset signed configurado en Cloudinary console. Aplica formatos permitidos
+  // (jpg/png/pdf/webp/heic) y demás restricciones server-side.
+  CLOUDINARY_UPLOAD_PRESET: z.string().default('cbi_viale'),
 })
 
 export type Env = z.infer<typeof envSchema>
