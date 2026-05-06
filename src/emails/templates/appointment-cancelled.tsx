@@ -1,7 +1,7 @@
 import { Link, Section, Text } from '@react-email/components'
 import { InfoRow } from './components/InfoRow'
 import { Layout } from './components/Layout'
-import { footnote, headingDanger, infoBox, link, paragraph } from './styles'
+import { colors, eyebrow, footnote, headingDanger, infoBox, link, paragraph } from './styles'
 import { formatDateArg, toDate } from './utils'
 
 export interface AppointmentCancelledProps {
@@ -22,6 +22,7 @@ export default function AppointmentCancelled({
 
   return (
     <Layout preview={preview}>
+      <Text style={{ ...eyebrow, color: colors.danger }}>Turno cancelado</Text>
       <Text style={headingDanger}>Tu turno fue cancelado</Text>
       <Text style={paragraph}>
         Hola {patient}, te informamos que el siguiente turno fue cancelado.

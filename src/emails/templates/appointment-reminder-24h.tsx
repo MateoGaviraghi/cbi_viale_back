@@ -1,7 +1,7 @@
 import { Link, Section, Text } from '@react-email/components'
 import { InfoRow } from './components/InfoRow'
 import { Layout } from './components/Layout'
-import { footnote, heading, infoBox, link, paragraph } from './styles'
+import { eyebrow, footnote, heading, infoBox, link, paragraph } from './styles'
 import { formatDateArg, toDate } from './utils'
 
 export interface AppointmentReminder24hProps {
@@ -20,6 +20,7 @@ export default function AppointmentReminder24h({
 
   return (
     <Layout preview={preview}>
+      <Text style={eyebrow}>Recordatorio · 24h</Text>
       <Text style={heading}>Te esperamos mañana</Text>
       <Text style={paragraph}>
         Hola {patient}, te recordamos que tenés un turno agendado en CBI Viale dentro

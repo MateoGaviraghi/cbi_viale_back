@@ -1,7 +1,7 @@
 import { Link, Section, Text } from '@react-email/components'
 import { InfoRow } from './components/InfoRow'
 import { Layout } from './components/Layout'
-import { footnote, heading, infoBox, link, paragraph } from './styles'
+import { eyebrow, footnote, heading, infoBox, link, paragraph } from './styles'
 import { formatDateArg, toDate } from './utils'
 
 export interface AppointmentConfirmationProps {
@@ -26,6 +26,7 @@ export default function AppointmentConfirmation({
 
   return (
     <Layout preview={preview}>
+      <Text style={eyebrow}>{reprogrammed ? 'Turno reprogramado' : 'Turno confirmado'}</Text>
       <Text style={heading}>{title}</Text>
       <Text style={paragraph}>
         Hola {patient}, te confirmamos los datos de tu turno en CBI Viale.

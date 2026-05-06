@@ -1,7 +1,7 @@
 import { Section, Text } from '@react-email/components'
 import { InfoRow } from './components/InfoRow'
 import { Layout } from './components/Layout'
-import { heading, infoBox, paragraph } from './styles'
+import { eyebrow, heading, infoBox, paragraph } from './styles'
 import { formatDateArg, toDate } from './utils'
 
 /**
@@ -36,6 +36,7 @@ export default function InternalNotification(props: InternalNotificationProps) {
     const preview = `Nuevo turno — ${props.service} · ${props.patient}`
     return (
       <Layout preview={preview}>
+        <Text style={eyebrow}>Nuevo turno · Interno</Text>
         <Text style={heading}>Nuevo turno agendado</Text>
         <Text style={paragraph}>
           Un paciente reservó un turno desde el sitio. Datos:
@@ -55,6 +56,7 @@ export default function InternalNotification(props: InternalNotificationProps) {
   const preview = `Nueva consulta — ${props.formType} · ${props.name}`
   return (
     <Layout preview={preview}>
+      <Text style={eyebrow}>Nueva consulta · Interno</Text>
       <Text style={heading}>Nueva consulta desde el sitio</Text>
       <Text style={paragraph}>
         Recibimos un formulario de contacto. Datos:

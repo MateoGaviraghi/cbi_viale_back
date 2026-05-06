@@ -1,7 +1,7 @@
 import { Section, Text } from '@react-email/components'
 import { InfoRow } from './components/InfoRow'
 import { Layout } from './components/Layout'
-import { footnote, heading, infoBox, paragraph } from './styles'
+import { eyebrow, footnote, heading, infoBox, paragraph } from './styles'
 
 export interface FormSubmissionReceiptProps {
   name: string
@@ -20,6 +20,7 @@ export default function FormSubmissionReceipt({
 
   return (
     <Layout preview={preview}>
+      <Text style={eyebrow}>Solicitud recibida</Text>
       <Text style={heading}>Recibimos tu consulta</Text>
       <Text style={paragraph}>
         Hola {name}, te confirmamos que tu consulta llegó a nuestro equipo. Te vamos
