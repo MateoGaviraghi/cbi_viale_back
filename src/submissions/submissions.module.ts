@@ -9,5 +9,6 @@ import { SubmissionsService } from './submissions.service'
   imports: [ServicesModule],
   controllers: [SubmissionsController],
   providers: [SubmissionsService],
+  exports: [SubmissionsService],
 })
 export class SubmissionsModule {}

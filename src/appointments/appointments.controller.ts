@@ -8,7 +8,9 @@ import {
   Patch,
   Post,
   Query,
+  Req,
 } from '@nestjs/common'
+import type { FastifyRequest } from 'fastify'
 import { ApiCookieAuth, ApiOperation, ApiTags } from '@nestjs/swagger'
 import { Throttle } from '@nestjs/throttler'
 import { CurrentUser, type AuthUser } from '../common/decorators/current-user.decorator'
@@ -52,8 +54,8 @@ export class AppointmentsController {
   @ApiOperation({
     summary: 'Crea un turno (PENDING), valida slot, encola email de confirmación',
   })
-  create(@Body() dto: CreateAppointmentDto) {
-    return this.appointments.create(dto)
+  create(@Body() dto: CreateAppointmentDto, @Req() req: FastifyRequest) {
+    return this.appointments.create(dto, req.ip)
   }
 
   // ---------------------------------------------------------------------------

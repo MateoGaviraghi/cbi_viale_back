@@ -168,11 +168,35 @@ model Appointment {
 
   service   Service    @relation(fields: [serviceId], references: [id])
   emailLogs EmailLog[]
+  consent   Consent?
 
   @@index([date, status])
   @@index([patientEmail])
   @@index([patientDni])
   @@index([serviceId, date])
+}
+
+// ============================================================================
+//  CONSENTIMIENTOS INFORMADOS
+// ============================================================================
+
+model Consent {
+  id              String   @id @default(cuid())
+  appointmentId   String   @unique
+  patientName     String
+  patientDni      String
+  serviceName     String
+  serviceSlug     String
+  appointmentDate DateTime
+  consentGivenAt  DateTime
+  ipAddress       String?
+  createdAt       DateTime @default(now())
+
+  appointment Appointment @relation(fields: [appointmentId], references: [id])
+
+  @@index([serviceSlug])
+  @@index([appointmentDate])
+  @@index([createdAt])
 }
 
 // ============================================================================

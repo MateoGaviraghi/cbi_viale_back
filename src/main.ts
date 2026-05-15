@@ -96,6 +96,7 @@ async function bootstrap() {
     .addTag('appointments', 'Reserva de turnos y gestión admin')
     .addTag('submissions', 'Formularios de contacto y consultas')
     .addTag('availability', 'Horarios de atención y bloqueos (admin)')
+    .addTag('admin', 'Dashboard admin: appointments, submissions, consents, stats')
     .addTag('users', 'Gestión de usuarios admin/empleados')
     .addTag('health', 'Health checks')
     .build()

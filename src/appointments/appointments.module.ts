@@ -10,5 +10,6 @@ import { AppointmentsService } from './appointments.service'
   imports: [ServicesModule, AvailabilityModule],
   controllers: [AppointmentsController],
   providers: [AppointmentsService],
+  exports: [AppointmentsService],
 })
 export class AppointmentsModule {}

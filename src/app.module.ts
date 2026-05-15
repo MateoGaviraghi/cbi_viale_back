@@ -15,6 +15,8 @@ import { EmailsModule } from './emails/emails.module'
 import { SubmissionsModule } from './submissions/submissions.module'
 import { UploadsModule } from './uploads/uploads.module'
 import { HealthModule } from './health/health.module'
+import { ConsentsModule } from './consents/consents.module'
+import { AdminModule } from './admin/admin.module'
 
 @Module({
   imports: [
@@ -60,6 +62,8 @@ import { HealthModule } from './health/health.module'
     SubmissionsModule,
     UploadsModule,
     HealthModule,
+    ConsentsModule,
+    AdminModule,
   ],
   providers: [
     // Rate limiting aplicado globalmente

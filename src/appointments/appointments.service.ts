@@ -142,7 +142,7 @@ export class AppointmentsService {
   //  Crear turno (público)
   // ============================================================================
 
-  async create(dto: CreateAppointmentDto): Promise<Appointment> {
+  async create(dto: CreateAppointmentDto, ipAddress?: string): Promise<Appointment> {
     const service = await this.services.findBySlugOrThrow(dto.serviceSlug)
 
     if (service.requiresConsent && dto.consentGiven !== true) {
@@ -166,7 +166,7 @@ export class AppointmentsService {
         })
         if (conflict) throw new ConflictException('Ese turno ya fue tomado por otro paciente')
 
-        return tx.appointment.create({
+        const appt = await tx.appointment.create({
           data: {
             serviceId: service.id,
             date: dto.date,
@@ -180,6 +180,23 @@ export class AppointmentsService {
             consentGiven: dto.consentGiven ?? false,
           },
         })
+
+        if (dto.consentGiven === true && service.requiresConsent) {
+          await tx.consent.create({
+            data: {
+              appointmentId: appt.id,
+              patientName: dto.patientName,
+              patientDni: dto.patientDni,
+              serviceName: service.name,
+              serviceSlug: service.slug,
+              appointmentDate: dto.date,
+              consentGivenAt: new Date(),
+              ipAddress: ipAddress ?? null,
+            },
+          })
+        }
+
+        return appt
       },
       { isolationLevel: 'Serializable' },
     )
