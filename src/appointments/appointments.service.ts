@@ -14,6 +14,7 @@ import type { Env } from '../config/env.schema'
 import { EmailsService } from '../emails/emails.service'
 import { PrismaService } from '../prisma/prisma.service'
 import { ServicesService } from '../services/services.service'
+import { UploadsService } from '../uploads/uploads.service'
 import type { AppointmentFiltersDto } from './dto/appointment-filters.dto'
 import type { CancelAppointmentDto } from './dto/cancel-appointment.dto'
 import type { CreateAppointmentDto } from './dto/create-appointment.dto'
@@ -48,6 +49,7 @@ export class AppointmentsService {
     private readonly availability: AvailabilityService,
     private readonly emails: EmailsService,
     private readonly config: ConfigService<Env, true>,
+    private readonly uploads: UploadsService,
   ) {}
 
   // ============================================================================
@@ -151,6 +153,14 @@ export class AppointmentsService {
       )
     }
 
+    // La firma virtual debe vivir en nuestro propio cloud — sino el cliente
+    // podría referenciar imágenes externas o URLs malformadas.
+    if (dto.signatureUrl && !this.uploads.isOwnCloudinaryUrl(dto.signatureUrl)) {
+      throw new BadRequestException(
+        'signatureUrl debe pertenecer al cloud propio. Subila vía POST /uploads/signature/sign.',
+      )
+    }
+
     await this.validateSlot(service.id, dto.date, service.durationMinutes)
 
     // Transacción serializable: chequeo de conflicto + create atomizados.
@@ -192,6 +202,13 @@ export class AppointmentsService {
               appointmentDate: dto.date,
               consentGivenAt: new Date(),
               ipAddress: ipAddress ?? null,
+              // Snapshot del firmante — si en el futuro cambia el profesional
+              // vigente, los PDFs históricos siguen mostrando quién firmó.
+              patientSignatureUrl: dto.signatureUrl ?? null,
+              professionalSignatureUrl:
+                this.config.get('PROFESSIONAL_SIGNATURE_URL', { infer: true }) || null,
+              professionalName: this.config.get('PROFESSIONAL_NAME', { infer: true }),
+              professionalRole: this.config.get('PROFESSIONAL_ROLE', { infer: true }),
             },
           })
         }

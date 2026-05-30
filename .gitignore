@@ -12,6 +12,13 @@ build
 .env*.local
 .env.production
 
+# artefactos de preview/test del consentimiento (PDFs generados localmente)
+consent-preview.pdf
+smoke-test-consent.pdf
+
+# firmas reales (datos personales — viven en Cloudinary, no en el repo)
+scripts/fixtures/
+
 # logs
 *.log
 npm-debug.log*

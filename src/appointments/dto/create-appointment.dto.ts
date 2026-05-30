@@ -6,6 +6,7 @@ import {
   IsEmail,
   IsOptional,
   IsString,
+  IsUrl,
   Length,
   Matches,
   MaxLength,
@@ -58,4 +59,14 @@ export class CreateAppointmentDto {
   @IsOptional()
   @IsBoolean()
   consentGiven?: boolean
+
+  @ApiPropertyOptional({
+    description:
+      'URL del PNG de firma del paciente. Subido vía POST /uploads/signature/sign. Debe pertenecer al cloud propio.',
+    example:
+      'https://res.cloudinary.com/<cloud>/image/upload/v1/cbi-viale/consent-signatures/abc.png',
+  })
+  @IsOptional()
+  @IsUrl({ require_protocol: true }, { message: 'signatureUrl inválida' })
+  signatureUrl?: string
 }

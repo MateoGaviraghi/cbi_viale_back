@@ -31,6 +31,7 @@ export class UploadsService {
   private readonly apiKey: string
   private readonly apiSecret: string
   private readonly folder: string
+  private readonly signatureFolder: string
   private readonly uploadPreset: string
 
   constructor(config: ConfigService<Env, true>) {
@@ -38,11 +39,21 @@ export class UploadsService {
     this.apiKey = config.get('CLOUDINARY_API_KEY', { infer: true })
     this.apiSecret = config.get('CLOUDINARY_API_SECRET', { infer: true })
     this.folder = config.get('CLOUDINARY_UPLOAD_FOLDER', { infer: true })
+    this.signatureFolder = config.get('CLOUDINARY_SIGNATURE_FOLDER', { infer: true })
     this.uploadPreset = config.get('CLOUDINARY_UPLOAD_PRESET', { infer: true })
   }
 
   /** Firma para subir foto de pedido médico al folder configurado. */
   signMedicalOrderUpload(): MedicalOrderSignResult {
+    return this.signUploadFor(this.folder)
+  }
+
+  /** Firma para subir el PNG de la firma del consentimiento. */
+  signSignatureUpload(): MedicalOrderSignResult {
+    return this.signUploadFor(this.signatureFolder)
+  }
+
+  private signUploadFor(folder: string): MedicalOrderSignResult {
     this.assertConfigured()
 
     const timestamp = Math.floor(Date.now() / 1000)
@@ -50,7 +61,7 @@ export class UploadsService {
     // forzado por la firma debe ir acá. Si lo omitimos, el front podría
     // tamperearlo y bypasear las restricciones del preset.
     const paramsToSign: Record<string, string | number> = {
-      folder: this.folder,
+      folder,
       timestamp,
       upload_preset: this.uploadPreset,
     }
@@ -61,7 +72,7 @@ export class UploadsService {
       cloudName: this.cloudName,
       apiKey: this.apiKey,
       timestamp,
-      folder: this.folder,
+      folder,
       uploadPreset: this.uploadPreset,
       signature,
       uploadUrl: `https://api.cloudinary.com/v1_1/${this.cloudName}/image/upload`,

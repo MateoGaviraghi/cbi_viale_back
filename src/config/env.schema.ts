@@ -56,9 +56,16 @@ export const envSchema = z.object({
   CLOUDINARY_API_KEY: z.string().default(''),
   CLOUDINARY_API_SECRET: z.string().default(''),
   CLOUDINARY_UPLOAD_FOLDER: z.string().default('cbi-viale/medical-orders'),
-  // Preset signed configurado en Cloudinary console. Aplica formatos permitidos
-  // (jpg/png/pdf/webp/heic) y demás restricciones server-side.
+  // Folder dedicado para firmas de consentimiento (separado de pedidos médicos).
+  CLOUDINARY_SIGNATURE_FOLDER: z.string().default('cbi-viale/consent-signatures'),
+  // Preset signed configurado en Cloudinary console.
   CLOUDINARY_UPLOAD_PRESET: z.string().default('cbi_viale'),
+
+  // Profesional firmante del consentimiento. URL apunta al PNG de la firma de
+  // Nahir en Cloudinary; si está vacía, la caja del profesional queda en blanco.
+  PROFESSIONAL_SIGNATURE_URL: z.string().default(''),
+  PROFESSIONAL_NAME: z.string().default('Nahir Gastaldi'),
+  PROFESSIONAL_ROLE: z.string().default('Bioquímica · CBI Viale'),
 })
 
 export type Env = z.infer<typeof envSchema>

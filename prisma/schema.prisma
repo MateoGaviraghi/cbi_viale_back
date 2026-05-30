@@ -181,18 +181,35 @@ model Appointment {
 // ============================================================================
 
 model Consent {
-  id              String   @id @default(cuid())
-  appointmentId   String   @unique
-  patientName     String
-  patientDni      String
-  serviceName     String
-  serviceSlug     String
-  appointmentDate DateTime
+  id String @id @default(cuid())
+
+  // Un Consent nace de un Appointment (turno con consentimiento) o de una
+  // FormSubmission (formulario público con firma virtual). Solo uno de los dos
+  // debe estar seteado — la regla se aplica en código.
+  appointmentId    String? @unique
+  formSubmissionId String? @unique
+
+  patientName String
+  patientDni  String
+  serviceName String
+  serviceSlug String
+
+  // Fecha del turno. Null cuando el consent viene de un formulario público.
+  // En el PDF se muestra createdAt como fallback.
+  appointmentDate DateTime?
   consentGivenAt  DateTime
   ipAddress       String?
-  createdAt       DateTime @default(now())
+  createdAt       DateTime  @default(now())
 
-  appointment Appointment @relation(fields: [appointmentId], references: [id])
+  // Firmas embebidas en el PDF (URLs Cloudinary). Snapshot del firmante para
+  // que los PDFs históricos no cambien si se actualiza el profesional vigente.
+  patientSignatureUrl      String?
+  professionalSignatureUrl String?
+  professionalName         String?
+  professionalRole         String?
+
+  appointment    Appointment?    @relation(fields: [appointmentId], references: [id])
+  formSubmission FormSubmission? @relation(fields: [formSubmissionId], references: [id])
 
   @@index([serviceSlug])
   @@index([appointmentDate])
@@ -288,6 +305,7 @@ model FormSubmission {
   service  Service?         @relation(fields: [serviceId], references: [id])
   parent   FormSubmission?  @relation("FormSubmissionLinkage", fields: [parentSubmissionId], references: [id])
   children FormSubmission[] @relation("FormSubmissionLinkage")
+  consent  Consent?
 
   @@index([type, status])
   @@index([createdAt])

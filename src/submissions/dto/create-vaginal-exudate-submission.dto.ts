@@ -7,6 +7,7 @@ import {
   IsInt,
   IsOptional,
   IsString,
+  IsUrl,
   Length,
   Matches,
   Max,
@@ -125,4 +126,12 @@ export class CreateVaginalExudateSubmissionDto {
   @ApiProperty({ example: true, description: 'Checkbox de consentimiento.' })
   @IsBoolean()
   consentGiven!: boolean
+
+  @ApiPropertyOptional({
+    description:
+      'URL del PNG de firma del paciente (Cloudinary). Genera Consent vinculado a esta submission.',
+  })
+  @IsOptional()
+  @IsUrl({ require_protocol: true }, { message: 'signatureUrl inválida' })
+  signatureUrl?: string
 }
