@@ -1,9 +1,4 @@
-import {
-  BadRequestException,
-  Injectable,
-  Logger,
-  NotFoundException,
-} from '@nestjs/common'
+import { BadRequestException, Injectable, Logger, NotFoundException } from '@nestjs/common'
 import { ConfigService } from '@nestjs/config'
 import type { FormSubmission, FormType } from '@prisma/client'
 import { Prisma } from '@prisma/client'
@@ -42,6 +37,12 @@ interface PersistAndNotifyArgs {
   /** Si presente + consentGiven=true, dispara la creación de un Consent ligado. */
   consent?: {
     signatureUrl?: string
+    /**
+     * true en formularios raíz que exigen firma propia (clínica, genética): sin
+     * firma no se permite crear el Consent. Los subforms (urocultivo/exudado)
+     * heredan el consentimiento del CLINICAL padre y no firman por separado.
+     */
+    requireSignature?: boolean
     patientDni: string
     /** Fecha relevante del trámite (ej collectionDate). Null → PDF usa createdAt. */
     relevantDate?: Date | null
@@ -111,6 +112,13 @@ export class SubmissionsService {
     ipAddress?: string,
   ): Promise<FormSubmission> {
     this.assertConsent(dto.consentGiven)
+    // El pedido médico debe vivir en el cloud propio (igual que la firma): el front
+    // lo sube vía POST /uploads/medical-order/sign. Evita persistir URLs ajenas.
+    if (!this.uploads.isOwnCloudinaryUrl(dto.medicalOrderUrl)) {
+      throw new BadRequestException(
+        'medicalOrderUrl debe pertenecer al cloud propio. Subila vía POST /uploads/medical-order/sign.',
+      )
+    }
     return this.persistAndNotify({
       type: 'CLINICAL',
       serviceSlug: 'clinica-humana',
@@ -129,6 +137,7 @@ export class SubmissionsService {
       },
       consent: {
         signatureUrl: dto.signatureUrl,
+        requireSignature: true,
         patientDni: dto.dni,
         relevantDate: null,
         ipAddress: ipAddress ?? null,
@@ -152,9 +161,7 @@ export class SubmissionsService {
       parentPhone = parent.phone
     } else {
       if (!dto.email || !dto.phone) {
-        throw new BadRequestException(
-          'Sin parentSubmissionId, email y phone son obligatorios.',
-        )
+        throw new BadRequestException('Sin parentSubmissionId, email y phone son obligatorios.')
       }
     }
 
@@ -219,9 +226,7 @@ export class SubmissionsService {
 
     const finalDni = dto.dni ?? parentDni ?? null
     if (!finalDni) {
-      throw new BadRequestException(
-        'DNI obligatorio (no se pudo heredar del parent submission)',
-      )
+      throw new BadRequestException('DNI obligatorio (no se pudo heredar del parent submission)')
     }
 
     return this.persistAndNotify({
@@ -308,9 +313,7 @@ export class SubmissionsService {
   }
 
   /** ENVIRONMENTAL — agua, efluentes, muestras ambientales. */
-  async createEnvironmental(
-    dto: CreateEnvironmentalSubmissionDto,
-  ): Promise<FormSubmission> {
+  async createEnvironmental(dto: CreateEnvironmentalSubmissionDto): Promise<FormSubmission> {
     return this.persistAndNotify({
       type: 'ENVIRONMENTAL',
       serviceSlug: 'ambiental',
@@ -348,10 +351,7 @@ export class SubmissionsService {
       name: dto.name,
       email: dto.email,
       phone: dto.phone,
-      message: this.buildMessage(
-        `Estudio genético · ${dto.studyType}`,
-        dto.observations,
-      ),
+      message: this.buildMessage(`Estudio genético · ${dto.studyType}`, dto.observations),
       consentGiven: dto.consentGiven,
       extraData: {
         dni: dto.dni,
@@ -370,6 +370,7 @@ export class SubmissionsService {
       },
       consent: {
         signatureUrl: dto.signatureUrl,
+        requireSignature: true,
         patientDni: dto.dni,
         relevantDate: dto.collectionDate,
         ipAddress: ipAddress ?? null,
@@ -438,11 +439,7 @@ export class SubmissionsService {
     return submission
   }
 
-  async update(
-    id: string,
-    dto: UpdateSubmissionDto,
-    userId: string,
-  ): Promise<FormSubmission> {
+  async update(id: string, dto: UpdateSubmissionDto, userId: string): Promise<FormSubmission> {
     const existing = await this.prisma.formSubmission.findUnique({ where: { id } })
     if (!existing) throw new NotFoundException('Consulta no encontrada')
 
@@ -482,9 +479,7 @@ export class SubmissionsService {
       throw new BadRequestException('parentSubmissionId no encontrado.')
     }
     if (parent.type !== 'CLINICAL') {
-      throw new BadRequestException(
-        'parentSubmissionId debe referenciar un formulario CLINICAL.',
-      )
+      throw new BadRequestException('parentSubmissionId debe referenciar un formulario CLINICAL.')
     }
     return parent
   }
@@ -501,11 +496,17 @@ export class SubmissionsService {
       throw new BadRequestException('extraData excede el tamaño máximo (10KB stringified)')
     }
 
+    // Formularios que exigen firma propia (clínica, genética): un consentimiento
+    // informado sin firma no tiene valor probatorio legal (datos de salud). La
+    // defensa del front es bypasseable llamando la API directo.
+    if (args.consentGiven && args.consent?.requireSignature && !args.consent.signatureUrl?.trim()) {
+      throw new BadRequestException(
+        'Este formulario requiere la firma del paciente (signatureUrl). Subila vía POST /uploads/signature/sign.',
+      )
+    }
+
     // Validación de firma fuera de la transacción para fallar rápido.
-    if (
-      args.consent?.signatureUrl &&
-      !this.uploads.isOwnCloudinaryUrl(args.consent.signatureUrl)
-    ) {
+    if (args.consent?.signatureUrl && !this.uploads.isOwnCloudinaryUrl(args.consent.signatureUrl)) {
       throw new BadRequestException(
         'signatureUrl debe pertenecer al cloud propio. Subila vía POST /uploads/signature/sign.',
       )

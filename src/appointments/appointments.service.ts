@@ -32,6 +32,11 @@ import {
 // Margen de 5 min para evitar rechazar turnos al límite por clock skew entre front/back.
 const FUTURE_MARGIN_MS = 5 * 60 * 1000
 
+// Cap de agendamiento: máximo N meses calendario a futuro (espejo del front
+// BookingCalendar, MAX_MONTHS_AHEAD=2). El front limitaba pero la API aceptaba
+// cualquier fecha futura — ahora también se valida server-side (disponibilidad + create).
+const MAX_MONTHS_AHEAD = 2
+
 export interface MonthlyAvailability {
   serviceSlug: string
   durationMinutes: number
@@ -67,14 +72,25 @@ export class AppointmentsService {
    *       · descartar slots pasados y ocupados
    *  5. Devolver array de días (incluye días vacíos para calendario completo).
    */
-  async getMonthlyAvailability(
-    serviceSlug: string,
-    month: string,
-  ): Promise<MonthlyAvailability> {
+  async getMonthlyAvailability(serviceSlug: string, month: string): Promise<MonthlyAvailability> {
     const service = await this.services.findBySlugOrThrow(serviceSlug)
     const [yearStr, monthStr] = month.split('-')
     const year = Number(yearStr)
     const mo = Number(monthStr)
+
+    // Cap temporal: del mes actual hasta MAX_MONTHS_AHEAD meses a futuro.
+    const nowParts = utcToLocalArgParts(new Date())
+    const requestedMonthIdx = year * 12 + (mo - 1)
+    const currentMonthIdx = nowParts.year * 12 + (nowParts.month - 1)
+    if (requestedMonthIdx < currentMonthIdx) {
+      throw new BadRequestException('El mes solicitado ya pasó')
+    }
+    if (requestedMonthIdx > currentMonthIdx + MAX_MONTHS_AHEAD) {
+      throw new BadRequestException(
+        `Solo hay disponibilidad hasta ${MAX_MONTHS_AHEAD} meses a futuro`,
+      )
+    }
+
     const lastDay = lastDayOfMonth(year, mo)
 
     // Rango completo del mes en UTC (a partir de local ARG)
@@ -103,9 +119,7 @@ export class AppointmentsService {
       const dayEndUtc = localArgToUtc(year, mo, day, 23, 59)
       const dateStr = `${year}-${String(mo).padStart(2, '0')}-${String(day).padStart(2, '0')}`
 
-      const isBlocked = blocks.some(
-        (b) => b.startDate <= dayEndUtc && b.endDate >= dayStartUtc,
-      )
+      const isBlocked = blocks.some((b) => b.startDate <= dayEndUtc && b.endDate >= dayStartUtc)
       if (isBlocked) {
         days.push({ date: dateStr, slots: [] })
         continue
@@ -150,6 +164,15 @@ export class AppointmentsService {
     if (service.requiresConsent && dto.consentGiven !== true) {
       throw new BadRequestException(
         'Este servicio requiere consentimiento explícito (consentGiven: true)',
+      )
+    }
+
+    // Servicios con consentimiento exigen la firma del paciente: sin ella el
+    // Consent que se persiste queda sin valor probatorio legal (datos de salud).
+    // La defensa del front (PatientForm) es bypasseable llamando la API directo.
+    if (service.requiresConsent && !dto.signatureUrl?.trim()) {
+      throw new BadRequestException(
+        'Este servicio requiere la firma del paciente (signatureUrl). Subila vía POST /uploads/signature/sign.',
       )
     }
 
@@ -315,11 +338,7 @@ export class AppointmentsService {
     return appt
   }
 
-  async update(
-    id: string,
-    dto: UpdateAppointmentDto,
-    userId: string,
-  ): Promise<Appointment> {
+  async update(id: string, dto: UpdateAppointmentDto, userId: string): Promise<Appointment> {
     const existing = await this.prisma.appointment.findUnique({ where: { id } })
     if (!existing) throw new NotFoundException('Turno no encontrado')
 
@@ -338,11 +357,7 @@ export class AppointmentsService {
     return updated
   }
 
-  async cancel(
-    id: string,
-    dto: CancelAppointmentDto,
-    userId: string,
-  ): Promise<Appointment> {
+  async cancel(id: string, dto: CancelAppointmentDto, userId: string): Promise<Appointment> {
     const existing = await this.prisma.appointment.findUnique({
       where: { id },
       include: { service: true },
@@ -381,11 +396,7 @@ export class AppointmentsService {
     return updated
   }
 
-  async reprogram(
-    id: string,
-    dto: ReprogramAppointmentDto,
-    userId: string,
-  ): Promise<Appointment> {
+  async reprogram(id: string, dto: ReprogramAppointmentDto, userId: string): Promise<Appointment> {
     const existing = await this.prisma.appointment.findUnique({
       where: { id },
       include: { service: true },
@@ -463,6 +474,17 @@ export class AppointmentsService {
     }
 
     const parts = utcToLocalArgParts(slotUtc)
+
+    // Cap superior: no agendar más allá de MAX_MONTHS_AHEAD meses (espejo del front).
+    const nowParts = utcToLocalArgParts(new Date())
+    const slotMonthIdx = parts.year * 12 + (parts.month - 1)
+    const nowMonthIdx = nowParts.year * 12 + (nowParts.month - 1)
+    if (slotMonthIdx > nowMonthIdx + MAX_MONTHS_AHEAD) {
+      throw new BadRequestException(
+        `No se puede agendar a más de ${MAX_MONTHS_AHEAD} meses a futuro`,
+      )
+    }
+
     const weekdayPrisma = jsWeekdayToPrisma(parts.weekday)
     const slotLocalMin = parts.hours * 60 + parts.minutes
 
@@ -477,9 +499,7 @@ export class AppointmentsService {
       return (slotLocalMin - startMin) % durationMinutes === 0
     })
     if (!match) {
-      throw new BadRequestException(
-        'No hay disponibilidad en ese horario para este servicio',
-      )
+      throw new BadRequestException('No hay disponibilidad en ese horario para este servicio')
     }
 
     const blocked = await this.availability.isDateBlockedForService(slotUtc, serviceId)
