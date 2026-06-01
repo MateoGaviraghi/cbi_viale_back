@@ -24,6 +24,16 @@ export interface MedicalOrderSignResult {
  *
  * Firma = SHA-1(<params alfabéticamente ordenados>=<values>&<api_secret>).
  * Ref: https://cloudinary.com/documentation/upload_images#generating_authentication_signatures
+ *
+ * HARDENING DEL PRESET (F9 — se configura en la consola de Cloudinary, NO en código):
+ * el endpoint de firma es público y anónimo, así que la defensa real contra abuso
+ * (subidas masivas, formatos arbitrarios, contaminación del folder de firmas) vive
+ * en el `upload_preset` (`CLOUDINARY_UPLOAD_PRESET`). Configurar en la consola:
+ *   - Allowed formats: jpg, png, webp
+ *   - Max file size (~10 MB) y max dimensions / incoming transformation que recorte
+ *   - Moderación / acceso restringido a los folders
+ * Evaluar además un token de un solo uso o challenge (Turnstile/hCaptcha) antes de
+ * firmar. El rate-limit (5/min/IP) dejó de ser evadible tras F1.
  */
 @Injectable()
 export class UploadsService {
