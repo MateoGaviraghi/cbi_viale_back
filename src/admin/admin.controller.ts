@@ -2,6 +2,7 @@ import { Controller, Get, Param, Query, Res } from '@nestjs/common'
 import { ApiCookieAuth, ApiOperation, ApiTags } from '@nestjs/swagger'
 import type { FastifyReply } from 'fastify'
 import { Permissions } from '../common/decorators/permissions.decorator'
+import { Roles } from '../common/decorators/roles.decorator'
 import { AppointmentsService } from '../appointments/appointments.service'
 import { AppointmentFiltersDto } from '../appointments/dto/appointment-filters.dto'
 import { ConsentsService } from '../consents/consents.service'
@@ -41,21 +42,21 @@ export class AdminController {
 
   // ── Consentimientos ──────────────────────────────────────────────────────────
 
-  @Permissions('manageConsents')
+  @Roles('ADMIN')
   @Get('consents')
   @ApiOperation({ summary: 'Lista paginada de consentimientos con filtros' })
   listConsents(@Query() filters: ConsentFiltersDto) {
     return this.consents.list(filters)
   }
 
-  @Permissions('manageConsents')
+  @Roles('ADMIN')
   @Get('consents/:id')
   @ApiOperation({ summary: 'Detalle de un consentimiento' })
   getConsent(@Param('id') id: string) {
     return this.consents.getByIdOrThrow(id)
   }
 
-  @Permissions('manageConsents')
+  @Roles('ADMIN')
   @Get('consents/:id/pdf')
   @ApiOperation({ summary: 'PDF del consentimiento informado (Content-Type: application/pdf)' })
   async getConsentPdf(@Param('id') id: string, @Res() reply: FastifyReply) {

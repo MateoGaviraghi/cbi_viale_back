@@ -3,7 +3,6 @@ import { SetMetadata } from '@nestjs/common'
 export const PERMISSIONS = [
   'manageAppointments',
   'manageSubmissions',
-  'manageConsents',
   'exportData',
   'editServices',
   'manageAvailability',
