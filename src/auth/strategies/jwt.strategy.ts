@@ -29,10 +29,16 @@ export class JwtStrategy extends PassportStrategy(Strategy, 'jwt') {
     })
   }
 
-  async validate(payload: { sub: string }): Promise<AuthUser> {
+  async validate(payload: { sub: string; tokenVersion?: number }): Promise<AuthUser> {
     const user = await this.users.findByIdOrThrow(payload.sub).catch(() => null)
     if (!user || !user.active) {
       throw new UnauthorizedException('Usuario no válido o desactivado')
+    }
+    // Invalida tokens emitidos antes de un reset de password / softDelete. Los
+    // tokens previos al deploy no traen tokenVersion → se tratan como 0 (no se
+    // invalidan sesiones vigentes salvo que efectivamente cambie la versión).
+    if ((payload.tokenVersion ?? 0) !== user.tokenVersion) {
+      throw new UnauthorizedException('Sesión expirada — volvé a iniciar sesión')
     }
     return {
       id: user.id,

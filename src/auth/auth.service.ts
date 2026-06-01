@@ -29,14 +29,14 @@ export class AuthService {
 
   async issueTokens(user: User): Promise<AuthTokens> {
     const accessToken = await this.jwt.signAsync(
-      { sub: user.id, email: user.email, role: user.role },
+      { sub: user.id, email: user.email, role: user.role, tokenVersion: user.tokenVersion },
       {
         secret: this.config.get('JWT_SECRET', { infer: true }),
         expiresIn: this.config.get('JWT_EXPIRES_IN', { infer: true }),
       },
     )
     const refreshToken = await this.jwt.signAsync(
-      { sub: user.id },
+      { sub: user.id, tokenVersion: user.tokenVersion },
       {
         secret: this.config.get('JWT_REFRESH_SECRET', { infer: true }),
         expiresIn: this.config.get('JWT_REFRESH_EXPIRES_IN', { infer: true }),

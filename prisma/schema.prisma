@@ -31,6 +31,9 @@ model User {
   role          UserRole  @default(EMPLOYEE)
   permissions   Json      @default("{}")
   active        Boolean   @default(true)
+  // Se incrementa en reset de password y softDelete para invalidar los tokens
+  // (access + refresh) previos. Se compara contra el `tokenVersion` del JWT.
+  tokenVersion  Int       @default(0)
   createdAt     DateTime  @default(now())
   updatedAt     DateTime  @updatedAt
 

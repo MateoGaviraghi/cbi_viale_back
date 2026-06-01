@@ -216,7 +216,8 @@ export class UsersService {
     const passwordHash = await bcrypt.hash(dto.newPassword, 10)
     const updated = await this.prisma.user.update({
       where: { id },
-      data: { passwordHash },
+      // Incrementar tokenVersion invalida los tokens (access + refresh) previos.
+      data: { passwordHash, tokenVersion: { increment: 1 } },
     })
     // NUNCA loguear la password en metadata
     await this.audit(currentUserId, 'USER_PASSWORD_RESET', id, {})
@@ -238,7 +239,8 @@ export class UsersService {
 
     const updated = await this.prisma.user.update({
       where: { id },
-      data: { active: false },
+      // tokenVersion++ corta también las sesiones vigentes del usuario desactivado.
+      data: { active: false, tokenVersion: { increment: 1 } },
     })
     await this.audit(currentUserId, 'USER_DELETE', id, { email: target.email })
     return toPublicUser(updated)
@@ -279,7 +281,13 @@ export class UsersService {
     metadata: Record<string, unknown>,
   ): Promise<void> {
     await this.prisma.auditLog.create({
-      data: { userId, action, entity: 'User', entityId, metadata: metadata as Prisma.InputJsonValue },
+      data: {
+        userId,
+        action,
+        entity: 'User',
+        entityId,
+        metadata: metadata as Prisma.InputJsonValue,
+      },
     })
   }
 }
