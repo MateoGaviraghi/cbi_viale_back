@@ -66,15 +66,28 @@ export class EmailsService {
     }
 
     // En modo QUEUE la queue siempre está inyectada (EmailsModule.forRoot la
-     // registra cuando RESEND_API_KEY tiene valor). Si llegó hasta acá sin queue
-     // hay un bug de configuración.
+    // registra cuando RESEND_API_KEY tiene valor). Si llegó hasta acá sin queue
+    // hay un bug de configuración.
     if (!this.queue) {
-      throw new Error('Modo QUEUE activo pero la queue no fue inyectada (revisar EmailsModule.forRoot)')
+      throw new Error(
+        'Modo QUEUE activo pero la queue no fue inyectada (revisar EmailsModule.forRoot)',
+      )
     }
     // TS pierde la correlación kind ↔ payload al reconstruir el objeto desde
     // un union discriminado (limitación conocida). `params` ya fue validado al
     // entrar por el tipo del argumento — la re-afirmación acá es segura.
     const jobData = { emailLogId: log.id, ...params } as EmailJobData
-    await this.queue.add(EMAIL_JOB_NAME, jobData)
+    // Fire-and-forget: NO bloqueamos la respuesta del request esperando a Redis.
+    // Si el encolado falla (Redis caído/inaccesible), logueamos y seguimos — el
+    // EmailLog ya quedó QUEUED y puede reprocesarse; el request nunca cuelga 120s.
+    void this.queue.add(EMAIL_JOB_NAME, jobData).catch((err: unknown) => {
+      this.logger.error({
+        event: 'email.enqueue_failed',
+        emailLogId: log.id,
+        kind: params.kind,
+        to: params.to,
+        error: err instanceof Error ? err.message : String(err),
+      })
+    })
   }
 }

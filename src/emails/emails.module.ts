@@ -55,6 +55,11 @@ export class EmailsModule {
                 username: url.username || undefined,
                 password: url.password || undefined,
                 maxRetriesPerRequest: null,
+                // Railway expone Redis por red privada IPv6 (redis.railway.internal).
+                // ioredis usa IPv4 (family 4) por defecto → connect ETIMEDOUT. family: 0
+                // deja que Node resuelva A y AAAA (dual-stack) y conecte por donde haya
+                // (IPv6 en Railway, IPv4 en dev local). Es la causa raíz del cuelgue.
+                family: 0,
               },
             }
           },

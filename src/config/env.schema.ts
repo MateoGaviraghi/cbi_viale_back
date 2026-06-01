@@ -29,7 +29,8 @@ export const envSchema = z.object({
   // CORS
   CORS_ORIGINS: z.string().default('http://localhost:3000'),
 
-  // Redis (BullMQ + cache)
+  // Redis (BullMQ + cache). El default localhost es solo para dev; en producción
+  // `validateEnv` rechaza localhost para no caer en silencio y colgar los jobs.
   REDIS_URL: z.string().default('redis://localhost:6379'),
 
   // Resend
@@ -79,5 +80,12 @@ export function validateEnv(raw: Record<string, unknown>): Env {
     console.error('❌ Env vars inválidas:\n', parsed.error.flatten().fieldErrors)
     throw new Error('Invalid environment configuration')
   }
-  return parsed.data
+  const env = parsed.data
+  // En producción REDIS_URL debe apuntar a un Redis real. Si quedó el default
+  // localhost, el back caería a localhost y los jobs (emails/PDF) colgarían en
+  // silencio — preferimos fallar claro al boot.
+  if (env.NODE_ENV === 'production' && /localhost|127\.0\.0\.1/.test(env.REDIS_URL)) {
+    throw new Error('REDIS_URL no puede ser localhost en producción — seteá la URL del Redis real')
+  }
+  return env
 }
