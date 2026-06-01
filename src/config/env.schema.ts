@@ -22,6 +22,9 @@ export const envSchema = z.object({
     .enum(['true', 'false'])
     .default('false')
     .transform((v) => v === 'true'),
+  // Secret dedicado para firmar cookies (@fastify/cookie). Separado de JWT_SECRET
+  // para no acoplar dos mecanismos criptográficos. Sin default → fail-fast al boot.
+  COOKIE_SECRET: z.string().min(32, 'COOKIE_SECRET debe tener al menos 32 chars'),
 
   // CORS
   CORS_ORIGINS: z.string().default('http://localhost:3000'),
@@ -37,9 +40,6 @@ export const envSchema = z.object({
   // Negocio
   BUSINESS_NOTIFICATION_EMAIL: z.string().default('contacto@cbiviale.com.ar'),
 
-  // Cron
-  CRON_SECRET: z.string().default(''),
-
   // Swagger
   SWAGGER_USER: z.string().default('admin'),
   SWAGGER_PASSWORD: z.string().default(''),
@@ -49,7 +49,9 @@ export const envSchema = z.object({
 
   // Seed (sólo se usa al correr prisma seed)
   SEED_ADMIN_EMAIL: z.string().email().default('admin@cbiviale.com.ar'),
-  SEED_ADMIN_PASSWORD: z.string().min(8).default('cbi-admin-2026'),
+  // Sin default: el boot falla si no se setea (evita una credencial ADMIN
+  // adivinable tipo `cbi-admin-<año>`). Rotar el valor real si alguna vez se usó.
+  SEED_ADMIN_PASSWORD: z.string().min(12, 'SEED_ADMIN_PASSWORD débil — mínimo 12 chars'),
 
   // Cloudinary (uploads de pedido médico — opcional; si están vacías, /uploads/* devuelve 503)
   CLOUDINARY_CLOUD_NAME: z.string().default(''),

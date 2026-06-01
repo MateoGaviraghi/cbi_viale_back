@@ -26,7 +26,12 @@ async function bootstrap() {
   const app = await NestFactory.create<NestFastifyApplication>(
     AppModule,
     new FastifyAdapter({
-      trustProxy: true, // Railway está detrás de un proxy
+      // Railway pone 1 proxy delante. Con `trustProxy: 1` Fastify deriva `req.ip`
+      // del único hop confiable e ignora cualquier `X-Forwarded-For` inyectado por
+      // el cliente. Con `true` se confiaba el header crudo → un atacante rotaba la
+      // IP y evadía el ThrottlerGuard (que trackea por `req.ip`). Si Railway sumara
+      // un segundo proxy, subir este número al nº real de hops.
+      trustProxy: 1,
       logger: false, // usamos pino via nestjs-pino
     }),
     { bufferLogs: true },
@@ -37,21 +42,29 @@ async function bootstrap() {
   const config = app.get(ConfigService<Env, true>)
   const nodeEnv = config.get('NODE_ENV', { infer: true })
   const port = config.get('PORT', { infer: true })
-  const corsOrigins = config.get('CORS_ORIGINS', { infer: true }).split(',').map((s) => s.trim())
+  const corsOrigins = config
+    .get('CORS_ORIGINS', { infer: true })
+    .split(',')
+    .map((s) => s.trim())
   const isProd = nodeEnv === 'production'
 
   // ------------- Seguridad -------------
+  // CSP base aplicada en TODO entorno (antes solo en prod → un staging sin
+  // NODE_ENV=production quedaba sin CSP). 'unsafe-inline' en script/style es
+  // necesario para Swagger UI, que solo se monta fuera de prod (ver más abajo).
   await app.register(fastifyHelmet, {
-    contentSecurityPolicy: isProd
-      ? {
-          directives: {
-            defaultSrc: [`'self'`],
-            styleSrc: [`'self'`, `'unsafe-inline'`],
-            imgSrc: [`'self'`, 'data:', 'https:'],
-            scriptSrc: [`'self'`],
-          },
-        }
-      : false, // en dev desactivamos CSP para Swagger UI
+    contentSecurityPolicy: {
+      directives: {
+        defaultSrc: [`'self'`],
+        baseUri: [`'self'`],
+        frameAncestors: [`'none'`],
+        objectSrc: [`'none'`],
+        scriptSrc: [`'self'`, `'unsafe-inline'`],
+        styleSrc: [`'self'`, `'unsafe-inline'`],
+        imgSrc: [`'self'`, 'data:', 'https://res.cloudinary.com'],
+        connectSrc: [`'self'`, ...corsOrigins],
+      },
+    },
   })
 
   await app.register(fastifyCors, {
@@ -63,7 +76,7 @@ async function bootstrap() {
   })
 
   await app.register(fastifyCookie, {
-    secret: config.get('JWT_SECRET', { infer: true }), // firma cookies si hace falta
+    secret: config.get('COOKIE_SECRET', { infer: true }), // secret dedicado (≠ JWT_SECRET)
   })
 
   // ------------- Validation global -------------
@@ -83,28 +96,30 @@ async function bootstrap() {
   app.setGlobalPrefix('api', { exclude: ['health', 'health/liveness', 'health/readiness'] })
   app.enableVersioning({ type: VersioningType.URI, defaultVersion: '1' })
 
-  // ------------- Swagger -------------
-  const swaggerUser = config.get('SWAGGER_USER', { infer: true })
-  const swaggerPassword = config.get('SWAGGER_PASSWORD', { infer: true })
-  const swaggerConfig = new DocumentBuilder()
-    .setTitle('CBI Viale API')
-    .setDescription('API del Centro Bioquímico Integral de Viale, Entre Ríos')
-    .setVersion('1.0')
-    .addCookieAuth('access_token')
-    .addTag('auth', 'Autenticación (login, logout, refresh, me)')
-    .addTag('services', 'Catálogo de los 6 servicios de CBI')
-    .addTag('appointments', 'Reserva de turnos y gestión admin')
-    .addTag('submissions', 'Formularios de contacto y consultas')
-    .addTag('availability', 'Horarios de atención y bloqueos (admin)')
-    .addTag('admin', 'Dashboard admin: appointments, submissions, consents, stats')
-    .addTag('users', 'Gestión de usuarios admin/empleados')
-    .addTag('health', 'Health checks')
-    .build()
-  const document = SwaggerModule.createDocument(app, swaggerConfig)
-  SwaggerModule.setup('api/docs', app, document, {
-    swaggerOptions: { persistAuthorization: true },
-    customSiteTitle: 'CBI Viale · API Docs',
-  })
+  // ------------- Swagger (solo fuera de producción) -------------
+  // En prod NO se monta: evita exponer el spec JSON y reduce la superficie de
+  // reconocimiento de la API. En dev sirve la doc interactiva en /api/docs.
+  if (!isProd) {
+    const swaggerConfig = new DocumentBuilder()
+      .setTitle('CBI Viale API')
+      .setDescription('API del Centro Bioquímico Integral de Viale, Entre Ríos')
+      .setVersion('1.0')
+      .addCookieAuth('access_token')
+      .addTag('auth', 'Autenticación (login, logout, refresh, me)')
+      .addTag('services', 'Catálogo de los 6 servicios de CBI')
+      .addTag('appointments', 'Reserva de turnos y gestión admin')
+      .addTag('submissions', 'Formularios de contacto y consultas')
+      .addTag('availability', 'Horarios de atención y bloqueos (admin)')
+      .addTag('admin', 'Dashboard admin: appointments, submissions, consents, stats')
+      .addTag('users', 'Gestión de usuarios admin/empleados')
+      .addTag('health', 'Health checks')
+      .build()
+    const document = SwaggerModule.createDocument(app, swaggerConfig)
+    SwaggerModule.setup('api/docs', app, document, {
+      swaggerOptions: { persistAuthorization: true },
+      customSiteTitle: 'CBI Viale · API Docs',
+    })
+  }
 
   // ------------- Graceful shutdown -------------
   app.enableShutdownHooks()
@@ -113,11 +128,8 @@ async function bootstrap() {
 
   const logger = app.get(Logger)
   logger.log(`🚀 CBI Viale API lista en puerto ${port} (${nodeEnv})`)
-  logger.log(`📘 Swagger: http://localhost:${port}/api/docs`)
+  if (!isProd) logger.log(`📘 Swagger: http://localhost:${port}/api/docs`)
   logger.log(`🔐 CORS origins: ${corsOrigins.join(', ')}`)
-  // Evita warning de unused env vars en dev
-  void swaggerUser
-  void swaggerPassword
 }
 
 bootstrap().catch((err) => {
