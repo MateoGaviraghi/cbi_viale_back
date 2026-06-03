@@ -10,6 +10,8 @@ import { ConsentFiltersDto } from '../consents/dto/consent-filters.dto'
 import { PrismaService } from '../prisma/prisma.service'
 import { SubmissionsService } from '../submissions/submissions.service'
 import { SubmissionFiltersDto } from '../submissions/dto/submission-filters.dto'
+import { AuditLogsService } from './audit-logs.service'
+import { AuditLogFiltersDto } from './dto/audit-log-filters.dto'
 
 @ApiTags('admin')
 @ApiCookieAuth()
@@ -20,6 +22,7 @@ export class AdminController {
     private readonly submissions: SubmissionsService,
     private readonly consents: ConsentsService,
     private readonly prisma: PrismaService,
+    private readonly auditLogs: AuditLogsService,
   ) {}
 
   // ── Turnos ──────────────────────────────────────────────────────────────────
@@ -70,7 +73,7 @@ export class AdminController {
 
   // ── Stats ────────────────────────────────────────────────────────────────────
 
-  @Permissions('manageAppointments')
+  @Permissions('viewAnalytics')
   @Get('stats')
   @ApiOperation({ summary: 'Métricas generales del dashboard' })
   async getStats() {
@@ -89,5 +92,14 @@ export class AdminController {
     return {
       data: { totalAppointments, totalSubmissions, totalConsents, appointmentsThisMonth },
     }
+  }
+
+  // ── Auditoría ─────────────────────────────────────────────────────────────────
+
+  @Permissions('viewAuditLog')
+  @Get('audit-logs')
+  @ApiOperation({ summary: 'Lista paginada del audit log con el usuario que ejecutó cada acción' })
+  listAuditLogs(@Query() filters: AuditLogFiltersDto) {
+    return this.auditLogs.list(filters)
   }
 }
