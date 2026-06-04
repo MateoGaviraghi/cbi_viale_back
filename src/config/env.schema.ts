@@ -22,11 +22,15 @@ export const envSchema = z.object({
     .enum(['true', 'false'])
     .default('false')
     .transform((v) => v === 'true'),
+  // Secret dedicado para firmar cookies (@fastify/cookie). Separado de JWT_SECRET
+  // para no acoplar dos mecanismos criptográficos. Sin default → fail-fast al boot.
+  COOKIE_SECRET: z.string().min(32, 'COOKIE_SECRET debe tener al menos 32 chars'),
 
   // CORS
   CORS_ORIGINS: z.string().default('http://localhost:3000'),
 
-  // Redis (BullMQ + cache)
+  // Redis (BullMQ + cache). El default localhost es solo para dev; en producción
+  // `validateEnv` rechaza localhost para no caer en silencio y colgar los jobs.
   REDIS_URL: z.string().default('redis://localhost:6379'),
 
   // Resend
@@ -37,9 +41,6 @@ export const envSchema = z.object({
   // Negocio
   BUSINESS_NOTIFICATION_EMAIL: z.string().default('contacto@cbiviale.com.ar'),
 
-  // Cron
-  CRON_SECRET: z.string().default(''),
-
   // Swagger
   SWAGGER_USER: z.string().default('admin'),
   SWAGGER_PASSWORD: z.string().default(''),
@@ -49,16 +50,25 @@ export const envSchema = z.object({
 
   // Seed (sólo se usa al correr prisma seed)
   SEED_ADMIN_EMAIL: z.string().email().default('admin@cbiviale.com.ar'),
-  SEED_ADMIN_PASSWORD: z.string().min(8).default('cbi-admin-2026'),
+  // Sin default: el boot falla si no se setea (evita una credencial ADMIN
+  // adivinable tipo `cbi-admin-<año>`). Rotar el valor real si alguna vez se usó.
+  SEED_ADMIN_PASSWORD: z.string().min(12, 'SEED_ADMIN_PASSWORD débil — mínimo 12 chars'),
 
   // Cloudinary (uploads de pedido médico — opcional; si están vacías, /uploads/* devuelve 503)
   CLOUDINARY_CLOUD_NAME: z.string().default(''),
   CLOUDINARY_API_KEY: z.string().default(''),
   CLOUDINARY_API_SECRET: z.string().default(''),
   CLOUDINARY_UPLOAD_FOLDER: z.string().default('cbi-viale/medical-orders'),
-  // Preset signed configurado en Cloudinary console. Aplica formatos permitidos
-  // (jpg/png/pdf/webp/heic) y demás restricciones server-side.
+  // Folder dedicado para firmas de consentimiento (separado de pedidos médicos).
+  CLOUDINARY_SIGNATURE_FOLDER: z.string().default('cbi-viale/consent-signatures'),
+  // Preset signed configurado en Cloudinary console.
   CLOUDINARY_UPLOAD_PRESET: z.string().default('cbi_viale'),
+
+  // Profesional firmante del consentimiento. URL apunta al PNG de la firma de
+  // Nahir en Cloudinary; si está vacía, la caja del profesional queda en blanco.
+  PROFESSIONAL_SIGNATURE_URL: z.string().default(''),
+  PROFESSIONAL_NAME: z.string().default('Nahir Gastaldi'),
+  PROFESSIONAL_ROLE: z.string().default('Bioquímica · CBI Viale'),
 })
 
 export type Env = z.infer<typeof envSchema>
@@ -70,5 +80,12 @@ export function validateEnv(raw: Record<string, unknown>): Env {
     console.error('❌ Env vars inválidas:\n', parsed.error.flatten().fieldErrors)
     throw new Error('Invalid environment configuration')
   }
-  return parsed.data
+  const env = parsed.data
+  // En producción REDIS_URL debe apuntar a un Redis real. Si quedó el default
+  // localhost, el back caería a localhost y los jobs (emails/PDF) colgarían en
+  // silencio — preferimos fallar claro al boot.
+  if (env.NODE_ENV === 'production' && /localhost|127\.0\.0\.1/.test(env.REDIS_URL)) {
+    throw new Error('REDIS_URL no puede ser localhost en producción — seteá la URL del Redis real')
+  }
+  return env
 }

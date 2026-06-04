@@ -29,4 +29,21 @@ export class UploadsController {
   signMedicalOrder(): MedicalOrderSignResult {
     return this.uploads.signMedicalOrderUpload()
   }
+
+  /**
+   * Idem que medical-order/sign pero apunta al folder de firmas. El front
+   * captura la firma con un canvas (signature_pad), exporta a PNG y la sube
+   * directo a Cloudinary con el payload firmado. La URL devuelta se manda
+   * como `signatureUrl` en el body del POST a /appointments o /submissions/*.
+   */
+  @Public()
+  @Throttle({ strict: { limit: 5, ttl: 60_000 } })
+  @Post('signature/sign')
+  @HttpCode(HttpStatus.OK)
+  @ApiOperation({
+    summary: 'Genera firma Cloudinary para subir el PNG de firma del consentimiento.',
+  })
+  signSignature(): MedicalOrderSignResult {
+    return this.uploads.signSignatureUpload()
+  }
 }

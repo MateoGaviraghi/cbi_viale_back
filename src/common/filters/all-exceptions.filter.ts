@@ -17,6 +17,23 @@ interface ErrorBody {
   timestamp: string
 }
 
+/** Reason phrases HTTP estándar usadas cuando la excepción no provee `error`. */
+const HTTP_REASON_PHRASES: Record<number, string> = {
+  400: 'Bad Request',
+  401: 'Unauthorized',
+  403: 'Forbidden',
+  404: 'Not Found',
+  409: 'Conflict',
+  422: 'Unprocessable Entity',
+  429: 'Too Many Requests',
+  500: 'Internal Server Error',
+  503: 'Service Unavailable',
+}
+
+function reasonPhrase(status: number): string {
+  return HTTP_REASON_PHRASES[status] ?? 'Error'
+}
+
 /**
  * Filter global — respuestas de error UNIFORMES en toda la API.
  * Maneja: HttpException de Nest, errores de Prisma conocidos, y resto como 500.
@@ -47,7 +64,9 @@ export class AllExceptionsFilter implements ExceptionFilter {
         exception instanceof Error ? exception.stack : exception,
       )
     } else {
-      this.logger.warn(`${request.method} ${request.url} → ${statusCode} · ${JSON.stringify(message)}`)
+      this.logger.warn(
+        `${request.method} ${request.url} → ${statusCode} · ${JSON.stringify(message)}`,
+      )
     }
 
     response.status(statusCode).send(body)
@@ -63,13 +82,15 @@ export class AllExceptionsFilter implements ExceptionFilter {
       const status = exception.getStatus()
       const response = exception.getResponse()
       if (typeof response === 'string') {
-        return { statusCode: status, message: response, error: exception.name }
+        return { statusCode: status, message: response, error: reasonPhrase(status) }
       }
       const responseObj = response as { message?: string | string[]; error?: string }
       return {
         statusCode: status,
         message: responseObj.message ?? exception.message,
-        error: responseObj.error ?? exception.name,
+        // Antes caía a `exception.name` (ej "UnauthorizedException") cuando el
+        // response no traía `error` — devolvemos la reason phrase HTTP estándar.
+        error: responseObj.error ?? reasonPhrase(status),
       }
     }
 

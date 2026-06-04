@@ -28,9 +28,14 @@ export class JwtRefreshStrategy extends PassportStrategy(Strategy, 'jwt-refresh'
     })
   }
 
-  async validate(payload: { sub: string }) {
+  async validate(payload: { sub: string; tokenVersion?: number }) {
     const user = await this.users.findByIdOrThrow(payload.sub).catch(() => null)
     if (!user || !user.active) {
+      throw new UnauthorizedException('Refresh token inválido')
+    }
+    // Mismo chequeo que el access: un refresh previo a un cambio de password queda
+    // invalidado (sino se podrían re-emitir access tokens con el refresh viejo).
+    if ((payload.tokenVersion ?? 0) !== user.tokenVersion) {
       throw new UnauthorizedException('Refresh token inválido')
     }
     return { id: user.id, email: user.email, name: user.name, role: user.role }

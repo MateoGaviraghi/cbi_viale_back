@@ -8,7 +8,9 @@ import {
   Patch,
   Post,
   Query,
+  Req,
 } from '@nestjs/common'
+import type { FastifyRequest } from 'fastify'
 import { ApiCookieAuth, ApiOperation, ApiTags } from '@nestjs/swagger'
 import { Throttle } from '@nestjs/throttler'
 import { CurrentUser, type AuthUser } from '../common/decorators/current-user.decorator'
@@ -55,10 +57,10 @@ export class SubmissionsController {
   @HttpCode(HttpStatus.CREATED)
   @ApiOperation({
     summary:
-      'Formulario CLINICA_HUMANA. Requiere foto de pedido médico ya subida a Cloudinary (medicalOrderUrl).',
+      'Formulario CLINICA_HUMANA. Requiere foto de pedido médico ya subida a Cloudinary (medicalOrderUrl). signatureUrl opcional genera Consent + PDF.',
   })
-  createClinical(@Body() dto: CreateClinicalSubmissionDto) {
-    return this.submissions.createClinical(dto)
+  createClinical(@Body() dto: CreateClinicalSubmissionDto, @Req() req: FastifyRequest) {
+    return this.submissions.createClinical(dto, req.ip)
   }
 
   @Public()
@@ -69,8 +71,8 @@ export class SubmissionsController {
     summary:
       'Subformulario UROCULTURE. Si viene linkeado a un CLINICAL, mandar parentSubmissionId; si no, email + phone son obligatorios.',
   })
-  createUroculture(@Body() dto: CreateUrocultureSubmissionDto) {
-    return this.submissions.createUroculture(dto)
+  createUroculture(@Body() dto: CreateUrocultureSubmissionDto, @Req() req: FastifyRequest) {
+    return this.submissions.createUroculture(dto, req.ip)
   }
 
   @Public()
@@ -81,8 +83,8 @@ export class SubmissionsController {
     summary:
       'Subformulario VAGINAL_EXUDATE. Si viene linkeado a un CLINICAL, mandar parentSubmissionId; si no, name + email + phone son obligatorios.',
   })
-  createVaginalExudate(@Body() dto: CreateVaginalExudateSubmissionDto) {
-    return this.submissions.createVaginalExudate(dto)
+  createVaginalExudate(@Body() dto: CreateVaginalExudateSubmissionDto, @Req() req: FastifyRequest) {
+    return this.submissions.createVaginalExudate(dto, req.ip)
   }
 
   @Public()
@@ -117,8 +119,8 @@ export class SubmissionsController {
   @Post('genetic')
   @HttpCode(HttpStatus.CREATED)
   @ApiOperation({ summary: 'Formulario GENETIC. Datos del paciente + estudio solicitado.' })
-  createGenetic(@Body() dto: CreateGeneticSubmissionDto) {
-    return this.submissions.createGenetic(dto)
+  createGenetic(@Body() dto: CreateGeneticSubmissionDto, @Req() req: FastifyRequest) {
+    return this.submissions.createGenetic(dto, req.ip)
   }
 
   // ---------------------------------------------------------------------------

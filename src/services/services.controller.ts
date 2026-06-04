@@ -19,7 +19,9 @@ export class ServicesController {
   @Public()
   @Get(':slug')
   @ApiOperation({ summary: 'Detalle de un servicio por slug (clinica-humana, veterinaria, etc.)' })
-  findOne(@Param('slug') slug: string) {
-    return this.services.findBySlugOrThrow(slug)
+  async findOne(@Param('slug') slug: string) {
+    // Envelope explícito { data } por consistencia con el resto de la API. El
+    // TransformInterceptor ya lo haría, pero lo dejamos explícito como en list().
+    return { data: await this.services.findBySlugOrThrow(slug) }
   }
 }

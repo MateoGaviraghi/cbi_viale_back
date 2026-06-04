@@ -14,6 +14,9 @@ import { ApiCookieAuth, ApiOperation, ApiTags } from '@nestjs/swagger'
 import type { FastifyReply } from 'fastify'
 import { CurrentUser, type AuthUser } from '../common/decorators/current-user.decorator'
 import { Permissions } from '../common/decorators/permissions.decorator'
+import { Roles } from '../common/decorators/roles.decorator'
+import { AuditLogsService } from './audit-logs.service'
+import { AuditLogFiltersDto } from './dto/audit-log-filters.dto'
 import { AppointmentsService } from '../appointments/appointments.service'
 import { AppointmentFiltersDto } from '../appointments/dto/appointment-filters.dto'
 import { CancelAppointmentDto } from '../appointments/dto/cancel-appointment.dto'
@@ -35,6 +38,7 @@ export class AdminController {
     private readonly submissions: SubmissionsService,
     private readonly consents: ConsentsService,
     private readonly prisma: PrismaService,
+    private readonly auditLogs: AuditLogsService,
   ) {}
 
   // ── Turnos ──────────────────────────────────────────────────────────────────
@@ -117,21 +121,21 @@ export class AdminController {
 
   // ── Consentimientos ──────────────────────────────────────────────────────────
 
-  @Permissions('manageConsents')
+  @Roles('ADMIN')
   @Get('consents')
   @ApiOperation({ summary: 'Lista paginada de consentimientos con filtros' })
   listConsents(@Query() filters: ConsentFiltersDto) {
     return this.consents.list(filters)
   }
 
-  @Permissions('manageConsents')
+  @Roles('ADMIN')
   @Get('consents/:id')
   @ApiOperation({ summary: 'Detalle de un consentimiento' })
   getConsent(@Param('id') id: string) {
     return this.consents.getByIdOrThrow(id)
   }
 
-  @Permissions('manageConsents')
+  @Roles('ADMIN')
   @Get('consents/:id/pdf')
   @ApiOperation({ summary: 'PDF del consentimiento informado (Content-Type: application/pdf)' })
   async getConsentPdf(@Param('id') id: string, @Res() reply: FastifyReply) {
@@ -145,7 +149,7 @@ export class AdminController {
 
   // ── Stats ────────────────────────────────────────────────────────────────────
 
-  @Permissions('manageAppointments')
+  @Permissions('viewAnalytics')
   @Get('stats')
   @ApiOperation({ summary: 'Métricas generales del dashboard' })
   async getStats() {
@@ -164,5 +168,14 @@ export class AdminController {
     return {
       data: { totalAppointments, totalSubmissions, totalConsents, appointmentsThisMonth },
     }
+  }
+
+  // ── Auditoría ─────────────────────────────────────────────────────────────────
+
+  @Permissions('viewAuditLog')
+  @Get('audit-logs')
+  @ApiOperation({ summary: 'Lista paginada del audit log con el usuario que ejecutó cada acción' })
+  listAuditLogs(@Query() filters: AuditLogFiltersDto) {
+    return this.auditLogs.list(filters)
   }
 }

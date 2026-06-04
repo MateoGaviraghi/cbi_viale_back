@@ -1,9 +1,4 @@
-import {
-  BadRequestException,
-  Injectable,
-  Logger,
-  NotFoundException,
-} from '@nestjs/common'
+import { BadRequestException, Injectable, Logger, NotFoundException } from '@nestjs/common'
 import { ConfigService } from '@nestjs/config'
 import type { FormSubmission, FormType } from '@prisma/client'
 import { Prisma } from '@prisma/client'
@@ -12,6 +7,7 @@ import type { Env } from '../config/env.schema'
 import { EmailsService } from '../emails/emails.service'
 import { PrismaService } from '../prisma/prisma.service'
 import { ServicesService } from '../services/services.service'
+import { UploadsService } from '../uploads/uploads.service'
 import type { CreateAgroFoodSubmissionDto } from './dto/create-agro-food-submission.dto'
 import type { CreateClinicalSubmissionDto } from './dto/create-clinical-submission.dto'
 import type { CreateEnvironmentalSubmissionDto } from './dto/create-environmental-submission.dto'
@@ -38,6 +34,20 @@ interface PersistAndNotifyArgs {
   message: string
   consentGiven: boolean
   extraData: Record<string, unknown>
+  /** Si presente + consentGiven=true, dispara la creación de un Consent ligado. */
+  consent?: {
+    signatureUrl?: string
+    /**
+     * true en formularios raíz que exigen firma propia (clínica, genética): sin
+     * firma no se permite crear el Consent. Los subforms (urocultivo/exudado)
+     * heredan el consentimiento del CLINICAL padre y no firman por separado.
+     */
+    requireSignature?: boolean
+    patientDni: string
+    /** Fecha relevante del trámite (ej collectionDate). Null → PDF usa createdAt. */
+    relevantDate?: Date | null
+    ipAddress?: string | null
+  }
 }
 
 @Injectable()
@@ -49,6 +59,7 @@ export class SubmissionsService {
     private readonly services: ServicesService,
     private readonly emails: EmailsService,
     private readonly config: ConfigService<Env, true>,
+    private readonly uploads: UploadsService,
   ) {}
 
   // ============================================================================
@@ -96,8 +107,18 @@ export class SubmissionsService {
   // ============================================================================
 
   /** CLINICA_HUMANA — paciente humano con foto del pedido médico. */
-  async createClinical(dto: CreateClinicalSubmissionDto): Promise<FormSubmission> {
+  async createClinical(
+    dto: CreateClinicalSubmissionDto,
+    ipAddress?: string,
+  ): Promise<FormSubmission> {
     this.assertConsent(dto.consentGiven)
+    // El pedido médico debe vivir en el cloud propio (igual que la firma): el front
+    // lo sube vía POST /uploads/medical-order/sign. Evita persistir URLs ajenas.
+    if (!this.uploads.isOwnCloudinaryUrl(dto.medicalOrderUrl)) {
+      throw new BadRequestException(
+        'medicalOrderUrl debe pertenecer al cloud propio. Subila vía POST /uploads/medical-order/sign.',
+      )
+    }
     return this.persistAndNotify({
       type: 'CLINICAL',
       serviceSlug: 'clinica-humana',
@@ -114,11 +135,21 @@ export class SubmissionsService {
         observations: dto.observations ?? null,
         medicalOrderUrl: dto.medicalOrderUrl,
       },
+      consent: {
+        signatureUrl: dto.signatureUrl,
+        requireSignature: true,
+        patientDni: dto.dni,
+        relevantDate: null,
+        ipAddress: ipAddress ?? null,
+      },
     })
   }
 
   /** UROCULTURE — subform de Clínica Humana. */
-  async createUroculture(dto: CreateUrocultureSubmissionDto): Promise<FormSubmission> {
+  async createUroculture(
+    dto: CreateUrocultureSubmissionDto,
+    ipAddress?: string,
+  ): Promise<FormSubmission> {
     this.assertConsent(dto.consentGiven)
 
     // Si tiene parent, validamos que exista y sea CLINICAL. Si no, requerimos email/phone.
@@ -130,9 +161,7 @@ export class SubmissionsService {
       parentPhone = parent.phone
     } else {
       if (!dto.email || !dto.phone) {
-        throw new BadRequestException(
-          'Sin parentSubmissionId, email y phone son obligatorios.',
-        )
+        throw new BadRequestException('Sin parentSubmissionId, email y phone son obligatorios.')
       }
     }
 
@@ -156,12 +185,19 @@ export class SubmissionsService {
         previousAntibiotics: dto.previousAntibiotics,
         baselinePathology: dto.baselinePathology,
       },
+      consent: {
+        signatureUrl: dto.signatureUrl,
+        patientDni: dto.dni,
+        relevantDate: dto.collectionDate,
+        ipAddress: ipAddress ?? null,
+      },
     })
   }
 
   /** VAGINAL_EXUDATE — subform de Clínica Humana. */
   async createVaginalExudate(
     dto: CreateVaginalExudateSubmissionDto,
+    ipAddress?: string,
   ): Promise<FormSubmission> {
     this.assertConsent(dto.consentGiven)
 
@@ -188,6 +224,11 @@ export class SubmissionsService {
     const finalEmail = dto.email ?? parentEmail!
     const finalPhone = dto.phone ?? parentPhone
 
+    const finalDni = dto.dni ?? parentDni ?? null
+    if (!finalDni) {
+      throw new BadRequestException('DNI obligatorio (no se pudo heredar del parent submission)')
+    }
+
     return this.persistAndNotify({
       type: 'VAGINAL_EXUDATE',
       serviceSlug: 'clinica-humana',
@@ -198,7 +239,7 @@ export class SubmissionsService {
       message: 'Subformulario de exudado vaginal',
       consentGiven: dto.consentGiven,
       extraData: {
-        dni: dto.dni ?? parentDni,
+        dni: finalDni,
         age: dto.age,
         lastMenstruationDate: dto.lastMenstruationDate.toISOString(),
         symptoms: dto.symptoms,
@@ -207,6 +248,12 @@ export class SubmissionsService {
         contraceptiveUse: dto.contraceptiveUse,
         vaginalInfectionHistory: dto.vaginalInfectionHistory,
         abortionCount: dto.abortionCount,
+      },
+      consent: {
+        signatureUrl: dto.signatureUrl,
+        patientDni: finalDni,
+        relevantDate: null,
+        ipAddress: ipAddress ?? null,
       },
     })
   }
@@ -266,9 +313,7 @@ export class SubmissionsService {
   }
 
   /** ENVIRONMENTAL — agua, efluentes, muestras ambientales. */
-  async createEnvironmental(
-    dto: CreateEnvironmentalSubmissionDto,
-  ): Promise<FormSubmission> {
+  async createEnvironmental(dto: CreateEnvironmentalSubmissionDto): Promise<FormSubmission> {
     return this.persistAndNotify({
       type: 'ENVIRONMENTAL',
       serviceSlug: 'ambiental',
@@ -295,7 +340,10 @@ export class SubmissionsService {
   }
 
   /** GENETIC — estudios genéticos. */
-  async createGenetic(dto: CreateGeneticSubmissionDto): Promise<FormSubmission> {
+  async createGenetic(
+    dto: CreateGeneticSubmissionDto,
+    ipAddress?: string,
+  ): Promise<FormSubmission> {
     this.assertConsent(dto.consentGiven)
     return this.persistAndNotify({
       type: 'GENETIC',
@@ -303,10 +351,7 @@ export class SubmissionsService {
       name: dto.name,
       email: dto.email,
       phone: dto.phone,
-      message: this.buildMessage(
-        `Estudio genético · ${dto.studyType}`,
-        dto.observations,
-      ),
+      message: this.buildMessage(`Estudio genético · ${dto.studyType}`, dto.observations),
       consentGiven: dto.consentGiven,
       extraData: {
         dni: dto.dni,
@@ -322,6 +367,13 @@ export class SubmissionsService {
         boneMarrowTransplant: dto.boneMarrowTransplant ?? null,
         studyDetail: dto.studyDetail,
         previousGeneticStudies: dto.previousGeneticStudies ?? null,
+      },
+      consent: {
+        signatureUrl: dto.signatureUrl,
+        requireSignature: true,
+        patientDni: dto.dni,
+        relevantDate: dto.collectionDate,
+        ipAddress: ipAddress ?? null,
       },
     })
   }
@@ -387,11 +439,7 @@ export class SubmissionsService {
     return submission
   }
 
-  async update(
-    id: string,
-    dto: UpdateSubmissionDto,
-    userId: string,
-  ): Promise<FormSubmission> {
+  async update(id: string, dto: UpdateSubmissionDto, userId: string): Promise<FormSubmission> {
     const existing = await this.prisma.formSubmission.findUnique({ where: { id } })
     if (!existing) throw new NotFoundException('Consulta no encontrada')
 
@@ -431,9 +479,7 @@ export class SubmissionsService {
       throw new BadRequestException('parentSubmissionId no encontrado.')
     }
     if (parent.type !== 'CLINICAL') {
-      throw new BadRequestException(
-        'parentSubmissionId debe referenciar un formulario CLINICAL.',
-      )
+      throw new BadRequestException('parentSubmissionId debe referenciar un formulario CLINICAL.')
     }
     return parent
   }
@@ -450,28 +496,71 @@ export class SubmissionsService {
       throw new BadRequestException('extraData excede el tamaño máximo (10KB stringified)')
     }
 
+    // Formularios que exigen firma propia (clínica, genética): un consentimiento
+    // informado sin firma no tiene valor probatorio legal (datos de salud). La
+    // defensa del front es bypasseable llamando la API directo.
+    if (args.consentGiven && args.consent?.requireSignature && !args.consent.signatureUrl?.trim()) {
+      throw new BadRequestException(
+        'Este formulario requiere la firma del paciente (signatureUrl). Subila vía POST /uploads/signature/sign.',
+      )
+    }
+
+    // Validación de firma fuera de la transacción para fallar rápido.
+    if (args.consent?.signatureUrl && !this.uploads.isOwnCloudinaryUrl(args.consent.signatureUrl)) {
+      throw new BadRequestException(
+        'signatureUrl debe pertenecer al cloud propio. Subila vía POST /uploads/signature/sign.',
+      )
+    }
+
     let serviceId: string | null = null
     let serviceName: string | null = null
+    let serviceSlugResolved: string | null = null
     if (args.serviceSlug) {
       const svc = await this.services.findBySlugOrThrow(args.serviceSlug)
       serviceId = svc.id
       serviceName = svc.name
+      serviceSlugResolved = svc.slug
     }
 
-    const submission = await this.prisma.formSubmission.create({
-      data: {
-        type: args.type,
-        serviceId,
-        parentSubmissionId: args.parentSubmissionId ?? null,
-        name: args.name,
-        email: args.email,
-        phone: args.phone,
-        subject: args.subject ?? null,
-        message: args.message,
-        consentGiven: args.consentGiven,
-        extraData: args.extraData as Prisma.InputJsonValue,
-        status: 'PENDING',
-      },
+    // Atomizamos creación de FormSubmission + Consent para no quedar inconsistentes.
+    const submission = await this.prisma.$transaction(async (tx) => {
+      const created = await tx.formSubmission.create({
+        data: {
+          type: args.type,
+          serviceId,
+          parentSubmissionId: args.parentSubmissionId ?? null,
+          name: args.name,
+          email: args.email,
+          phone: args.phone,
+          subject: args.subject ?? null,
+          message: args.message,
+          consentGiven: args.consentGiven,
+          extraData: args.extraData as Prisma.InputJsonValue,
+          status: 'PENDING',
+        },
+      })
+
+      if (args.consentGiven && args.consent && serviceName && serviceSlugResolved) {
+        await tx.consent.create({
+          data: {
+            formSubmissionId: created.id,
+            patientName: args.name,
+            patientDni: args.consent.patientDni,
+            serviceName,
+            serviceSlug: serviceSlugResolved,
+            appointmentDate: args.consent.relevantDate ?? null,
+            consentGivenAt: new Date(),
+            ipAddress: args.consent.ipAddress ?? null,
+            patientSignatureUrl: args.consent.signatureUrl ?? null,
+            professionalSignatureUrl:
+              this.config.get('PROFESSIONAL_SIGNATURE_URL', { infer: true }) || null,
+            professionalName: this.config.get('PROFESSIONAL_NAME', { infer: true }),
+            professionalRole: this.config.get('PROFESSIONAL_ROLE', { infer: true }),
+          },
+        })
+      }
+
+      return created
     })
 
     await this.notifyOnCreate(submission, serviceName)

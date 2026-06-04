@@ -77,4 +77,12 @@ export class CreateClinicalSubmissionDto {
   })
   @IsUrl({ require_protocol: true }, { message: 'URL de pedido médico inválida' })
   medicalOrderUrl!: string
+
+  @ApiPropertyOptional({
+    description:
+      'URL del PNG de firma del paciente (Cloudinary). Genera Consent vinculado a esta submission.',
+  })
+  @IsOptional()
+  @IsUrl({ require_protocol: true }, { message: 'signatureUrl inválida' })
+  signatureUrl?: string
 }

@@ -98,7 +98,15 @@ async function main() {
 
   // --- Admin inicial ---
   const adminEmail = process.env.SEED_ADMIN_EMAIL ?? 'admin@cbiviale.com.ar'
-  const adminPassword = process.env.SEED_ADMIN_PASSWORD ?? 'cbi-admin-2026'
+  // Sin fallback: si no hay una password fuerte seteada, abortamos en vez de
+  // crear un admin con credencial adivinable (ver F8 de la auditoría).
+  const adminPassword = process.env.SEED_ADMIN_PASSWORD
+  if (!adminPassword || adminPassword.length < 12) {
+    throw new Error(
+      'SEED_ADMIN_PASSWORD no seteada o demasiado corta (mínimo 12 chars). ' +
+        'Definí una password fuerte en .env antes de correr el seed.',
+    )
+  }
   const passwordHash = await bcrypt.hash(adminPassword, 10)
 
   await prisma.user.upsert({

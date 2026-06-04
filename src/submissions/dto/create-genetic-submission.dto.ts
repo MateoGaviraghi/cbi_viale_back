@@ -8,6 +8,7 @@ import {
   IsInt,
   IsOptional,
   IsString,
+  IsUrl,
   Length,
   Matches,
   Max,
@@ -139,4 +140,12 @@ export class CreateGeneticSubmissionDto {
   @IsString()
   @MaxLength(1000)
   previousGeneticStudies?: string
+
+  @ApiPropertyOptional({
+    description:
+      'URL del PNG de firma del paciente (Cloudinary). Genera Consent vinculado a esta submission.',
+  })
+  @IsOptional()
+  @IsUrl({ require_protocol: true }, { message: 'signatureUrl inválida' })
+  signatureUrl?: string
 }
