@@ -14,7 +14,9 @@ export const envSchema = z.object({
   JWT_SECRET: z.string().min(32, 'JWT_SECRET debe tener al menos 32 chars'),
   JWT_EXPIRES_IN: z.string().default('15m'),
   JWT_REFRESH_SECRET: z.string().min(32, 'JWT_REFRESH_SECRET debe tener al menos 32 chars'),
-  JWT_REFRESH_EXPIRES_IN: z.string().default('7d'),
+  // Duración de la sesión (el refresh la define; el access se renueva solo).
+  // 90d = 3 meses. Default por código para no depender de la env var en Railway.
+  JWT_REFRESH_EXPIRES_IN: z.string().default('90d'),
 
   // Cookies
   COOKIE_DOMAIN: z.string().default('localhost'),
