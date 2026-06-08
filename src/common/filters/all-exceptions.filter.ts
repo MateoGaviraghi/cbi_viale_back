@@ -35,6 +35,22 @@ function reasonPhrase(status: number): string {
 }
 
 /**
+ * Códigos Prisma de conectividad/transitorios: la query NO llegó a ejecutarse
+ * (no se pudo abrir o se cayó la conexión). El servidor pudo estar dormido
+ * (cold start de Neon) o caído. Se mapean a 503 con mensaje genérico — nunca se
+ * devuelve el host ni la connection string al cliente.
+ */
+const PRISMA_CONNECTIVITY_CODES = new Set<string>([
+  'P1001', // Can't reach database server
+  'P1002', // Database server reached but timed out
+  'P1008', // Operations timed out
+  'P1017', // Server has closed the connection
+])
+
+const SERVICE_UNAVAILABLE_MESSAGE =
+  'Servicio temporalmente no disponible. Reintentá en unos segundos.'
+
+/**
  * Filter global — respuestas de error UNIFORMES en toda la API.
  * Maneja: HttpException de Nest, errores de Prisma conocidos, y resto como 500.
  */
@@ -69,6 +85,11 @@ export class AllExceptionsFilter implements ExceptionFilter {
       )
     }
 
+    // 503 → sugerimos al cliente cuándo reintentar (cold start de Neon, etc.).
+    if (statusCode === HttpStatus.SERVICE_UNAVAILABLE) {
+      response.header('Retry-After', '3')
+    }
+
     response.status(statusCode).send(body)
   }
 
@@ -94,8 +115,26 @@ export class AllExceptionsFilter implements ExceptionFilter {
       }
     }
 
+    // Prisma: fallo de inicialización/conexión (cold start de Neon, DB caída,
+    // credenciales inválidas al abrir el cliente). Genérico → no filtra infra.
+    if (exception instanceof Prisma.PrismaClientInitializationError) {
+      return {
+        statusCode: HttpStatus.SERVICE_UNAVAILABLE,
+        message: SERVICE_UNAVAILABLE_MESSAGE,
+        error: 'Service Unavailable',
+      }
+    }
+
     // Prisma: unique constraint (P2002), not found (P2025), etc.
     if (exception instanceof Prisma.PrismaClientKnownRequestError) {
+      // Conectividad transitoria → 503 (la query no se ejecutó; reintentable).
+      if (PRISMA_CONNECTIVITY_CODES.has(exception.code)) {
+        return {
+          statusCode: HttpStatus.SERVICE_UNAVAILABLE,
+          message: SERVICE_UNAVAILABLE_MESSAGE,
+          error: 'Service Unavailable',
+        }
+      }
       if (exception.code === 'P2002') {
         return {
           statusCode: HttpStatus.CONFLICT,
@@ -110,9 +149,12 @@ export class AllExceptionsFilter implements ExceptionFilter {
           error: 'Not Found',
         }
       }
+      // Resto: NO devolvemos `exception.message` — puede filtrar tabla/columna/
+      // valor de la query. Se loguea completo server-side (ver `catch`); al
+      // cliente, genérico con el código Prisma como pista segura.
       return {
         statusCode: HttpStatus.BAD_REQUEST,
-        message: exception.message.split('\n').pop() ?? 'Database error',
+        message: `No se pudo procesar la solicitud (${exception.code})`,
         error: 'Bad Request',
       }
     }
@@ -125,10 +167,29 @@ export class AllExceptionsFilter implements ExceptionFilter {
       }
     }
 
-    // Fallback 500
+    // Prisma: panic del engine / error desconocido → 500 genérico, sin filtrar.
+    if (
+      exception instanceof Prisma.PrismaClientRustPanicError ||
+      exception instanceof Prisma.PrismaClientUnknownRequestError
+    ) {
+      return {
+        statusCode: HttpStatus.INTERNAL_SERVER_ERROR,
+        message: 'Error interno del servidor',
+        error: 'Internal Server Error',
+      }
+    }
+
+    // Fallback 500. En prod NO exponemos el mensaje crudo (puede filtrar internals
+    // de libs de terceros); el stack se loguea igual en `catch`. En dev sí, para
+    // debuggear cómodo.
     return {
       statusCode: HttpStatus.INTERNAL_SERVER_ERROR,
-      message: exception instanceof Error ? exception.message : 'Internal server error',
+      message:
+        process.env.NODE_ENV === 'production'
+          ? 'Error interno del servidor'
+          : exception instanceof Error
+            ? exception.message
+            : 'Internal server error',
       error: 'Internal Server Error',
     }
   }
