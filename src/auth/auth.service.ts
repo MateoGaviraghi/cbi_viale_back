@@ -11,6 +11,33 @@ export interface AuthTokens {
   refreshToken: string
 }
 
+/**
+ * Convierte un span de expiración tipo "90d" | "12h" | "15m" | "30s" a segundos.
+ * Permite que el `maxAge` de cada cookie siga a su env var de JWT (JWT_EXPIRES_IN /
+ * JWT_REFRESH_EXPIRES_IN) → fuente única de verdad, sin drift entre la vida del
+ * token y la de la cookie. Formato inválido = fail-fast (mejor que una sesión
+ * silenciosamente más corta de lo configurado).
+ */
+function spanToSeconds(span: string): number {
+  const match = /^(\d+)\s*([smhd])$/.exec(span.trim())
+  if (!match) {
+    throw new Error(`Span de expiración JWT inválido: "${span}" (usar formato 90d/12h/15m/30s)`)
+  }
+  const value = Number(match[1])
+  switch (match[2]) {
+    case 's':
+      return value
+    case 'm':
+      return value * 60
+    case 'h':
+      return value * 3600
+    case 'd':
+      return value * 86400
+    default:
+      throw new Error(`Unidad de span JWT no soportada: "${span}"`)
+  }
+}
+
 @Injectable()
 export class AuthService {
   constructor(
@@ -64,13 +91,15 @@ export class AuthService {
 
     reply.setCookie('access_token', tokens.accessToken, {
       ...baseOpts,
-      maxAge: 60 * 15, // 15 min
+      maxAge: spanToSeconds(this.config.get('JWT_EXPIRES_IN', { infer: true })),
     })
 
     reply.setCookie('refresh_token', tokens.refreshToken, {
       ...baseOpts,
       path: '/api/v1/auth',
-      maxAge: 60 * 60 * 24 * 7, // 7 días
+      // La sesión efectiva la define este refresh (el access se renueva solo).
+      // Sigue a JWT_REFRESH_EXPIRES_IN: poner "90d" en la env = login dura 3 meses.
+      maxAge: spanToSeconds(this.config.get('JWT_REFRESH_EXPIRES_IN', { infer: true })),
     })
   }
 
