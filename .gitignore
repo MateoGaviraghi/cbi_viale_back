@@ -11,6 +11,7 @@ build
 .env
 .env*.local
 .env.production
+.env.example
 
 # artefactos de preview/test del consentimiento (PDFs generados localmente)
 consent-preview.pdf
