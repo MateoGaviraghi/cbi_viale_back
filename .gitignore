@@ -17,6 +17,9 @@ build
 consent-preview.pdf
 smoke-test-consent.pdf
 
+# backups de DB (datos sensibles: hashes, emails — nunca al repo)
+_db-backup-*.json
+
 # firmas reales (datos personales — viven en Cloudinary, no en el repo)
 scripts/fixtures/
 
